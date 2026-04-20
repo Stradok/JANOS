@@ -1,0 +1,3 @@
+2026-04-12 01:44:36,120 [INFO] [WakeWord] Wake word changed to: hey_jan
+2026-04-12 01:44:36,121 [INFO] [WakeWord] Silence threshold set to 600
+2026-04-12 01:44:36,121 [INFO] [WakeWord] Silence duration set to 2.0s

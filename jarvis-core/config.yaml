@@ -1,0 +1,91 @@
+features:
+  echo: true
+  math: true
+  time: true
+  weather: true
+  notes: true
+  stt: true
+  tts: true
+  speaker: true
+  app_launcher: true
+  keyboard_mouse: true
+  file_manager: true
+  system_control: true
+  browser: true
+  web_search: true
+  youtube: true
+  spotify: true
+  memory: true
+  smart_tts: true
+  research_agent: true
+  module_generator: true
+  proactive_learning: true
+  vision: true
+  dual_llm: true
+  person_recognition: true
+  ar: true
+  daemon: true
+  wake_word: true
+  screen_reader: true
+  learning_engine: true
+
+settings:
+  auto_voice: true   # JAN auto-speaks every response
+  wake_word: true    # always-listening voice activation
+  ar_server: false   # AR WebSocket server (enable when using phone/VR)
+  camera_watch: false # auto-detect faces via webcam
+  default_city: Islamabad  # default location for weather etc.
+  orchestrator: v2   # v1 = single-shot, v2 = agent-based
+
+models:
+  llm: "llama3.1:8b"
+  stt: "whisper"
+  tts: "coqui"
+  router: "qwen2.5:7b-instruct"  # used by orchestrator to classify intents
+  coder: "qwen2.5-coder:7b"      # used by coding + self-improvement agents
+
+# Agent-specific settings
+agents:
+  max_steps: 15            # max iterations per agent run
+  step_timeout: 30         # seconds per step before timeout
+  observe_after_ui: true   # take screenshot+OCR after UI actions
+  vision_model: "llava"    # ollama vision model for screen understanding (optional)
+  use_vision: false        # enable vision model (requires llava pulled in ollama)
+  log_steps: true          # log each agent step to memory
+
+  # Per-agent model overrides (defaults to models.router)
+  models:
+    chat: "qwen2.5:7b-instruct"
+    browser: "qwen2.5:7b-instruct"
+    media: "qwen2.5:7b-instruct"
+    communication: "qwen2.5:7b-instruct"
+    research: "qwen2.5:7b-instruct"
+    memory: "qwen2.5:7b-instruct"
+    productivity: "qwen2.5:7b-instruct"
+    file: "qwen2.5:7b-instruct"
+    system: "qwen2.5:7b-instruct"
+    coding: "qwen2.5-coder:7b"
+    creative: "qwen2.5:7b-instruct"
+    automation: "qwen2.5:7b-instruct"
+    vision: "qwen2.5:7b-instruct"
+    self_improvement: "qwen2.5-coder:7b"
+
+  # Per-agent max steps overrides
+  max_steps_override:
+    chat: 5
+    media: 12
+    communication: 20
+    research: 15
+    memory: 5
+    productivity: 8
+    automation: 20
+
+# Self-learning settings
+learning:
+  auto_start: true           # start background learning on boot
+  session_duration: 30        # minutes per learning session
+  interval_hours: 6           # hours between sessions
+  topics:                     # custom topics to explore (in addition to defaults)
+    - "latest AI news and developments"
+    - "Pakistan current events"
+    - "useful Windows automation tips"

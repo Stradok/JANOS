@@ -1,0 +1,85 @@
+Got it 👍 Here’s a **clean step-by-step guide** you can save for next time whenever you want to create & activate a Python virtual environment in **PowerShell** (with the bypass fix included).
+
+---
+
+# 🛠 Steps to Create & Activate a Virtual Environment in PowerShell
+
+### **1. Navigate to your project folder**
+
+```powershell
+cd "H:\Coding\New folder"
+```
+
+---
+
+### **2. Create a virtual environment**
+
+```powershell
+python -m venv dl_env
+```
+
+* `dl_env` is the environment name (you can choose any).
+* This will create a folder `dl_env` with Python inside it.
+
+---
+
+### **3. Allow script execution (bypass for this session only)**
+
+PowerShell blocks running scripts by default. To temporarily allow activation, run:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+```
+
+⚠️ Safe → this only applies to the **current PowerShell window** and resets when you close it.
+
+---
+
+### **4. Activate the environment**
+
+```powershell
+.\dl_env\Scripts\activate
+```
+
+✅ If it worked, your prompt will now look like:
+
+```
+(dl_env) PS H:\Coding\New folder>
+```
+
+---
+
+### **5. Verify it’s active**
+
+```powershell
+python -c "import sys; print(sys.executable)"
+```
+
+It should show:
+
+```
+H:\Coding\New folder\dl_env\Scripts\python.exe
+```
+
+---
+
+### **6. Deactivate when done**
+
+```powershell
+deactivate
+```
+
+---
+
+# ⚡ Quick Recap (One-Liners)
+
+```powershell
+cd "H:\Coding\New folder"
+python -m venv dl_env
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\dl_env\Scripts\activate
+```
+
+---
+
+Would you like me to also make you a **ready-to-copy text file (env_setup.txt)** with these commands so you don’t have to memorize them?

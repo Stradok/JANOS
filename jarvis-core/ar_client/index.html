@@ -1,0 +1,845 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>JAN AR</title>
+    <style>
+        /* Full screen, no scrolling */
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #000;
+            overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            touch-action: none;
+            width: 100vw;
+            height: 100vh;
+            color: #fff;
+        }
+
+        /* Camera feed */
+        #camera-feed {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100vw;
+            height: 100vh;
+            object-fit: cover;
+            z-index: 1;
+        }
+
+        /* Overlay canvas — exactly matches video */
+        #overlay-canvas {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 2;
+            pointer-events: none;
+        }
+
+        /* HUD layer for UI controls */
+        #hud {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 3;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            pointer-events: none;
+        }
+        #hud > * { pointer-events: auto; }
+
+        /* Top bar */
+        .top-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 16px;
+            padding-top: max(12px, env(safe-area-inset-top));
+            background: linear-gradient(to bottom, rgba(0,0,0,0.5), transparent);
+        }
+        .status-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #f44;
+            transition: background 0.3s;
+            box-shadow: 0 0 6px rgba(255,68,68,0.6);
+        }
+        .status-dot.connected {
+            background: #4f4;
+            box-shadow: 0 0 6px rgba(68,255,68,0.6);
+        }
+        .status-text {
+            font-size: 13px;
+            opacity: 0.85;
+            text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+        }
+        .gear-btn {
+            width: 40px;
+            height: 40px;
+            border: none;
+            background: rgba(255,255,255,0.12);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border-radius: 50%;
+            color: #fff;
+            font-size: 20px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .gear-btn:active { background: rgba(255,255,255,0.25); }
+
+        /* Mode info display */
+        .mode-label {
+            text-align: center;
+            pointer-events: none;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-start;
+            padding-top: 8px;
+        }
+        .mode-label span {
+            font-size: 14px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            background: rgba(0,0,0,0.35);
+            backdrop-filter: blur(6px);
+            -webkit-backdrop-filter: blur(6px);
+            padding: 6px 16px;
+            border-radius: 20px;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.6);
+        }
+
+        /* Navigate mode destination button */
+        .nav-actions {
+            text-align: center;
+            padding-bottom: 8px;
+            pointer-events: auto;
+        }
+        .nav-actions.hidden { display: none; }
+        .dest-btn {
+            padding: 10px 24px;
+            border: 1.5px solid rgba(255,255,255,0.3);
+            background: rgba(0,0,0,0.45);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            color: #fff;
+            border-radius: 25px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+        }
+        .dest-btn:active { background: rgba(255,255,255,0.15); }
+
+        /* Bottom mode switcher */
+        .bottom-bar {
+            padding: 12px 8px;
+            padding-bottom: max(16px, env(safe-area-inset-bottom));
+            background: linear-gradient(to top, rgba(0,0,0,0.6), transparent);
+        }
+        .mode-switcher {
+            display: flex;
+            justify-content: center;
+            gap: 6px;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+            scrollbar-width: none;
+        }
+        .mode-switcher::-webkit-scrollbar { display: none; }
+        .mode-btn {
+            flex-shrink: 0;
+            padding: 10px 18px;
+            border: 1.5px solid rgba(255,255,255,0.2);
+            background: rgba(255,255,255,0.08);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            color: rgba(255,255,255,0.7);
+            border-radius: 25px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+        .mode-btn.active {
+            background: rgba(0,122,255,0.55);
+            border-color: rgba(0,122,255,0.8);
+            color: #fff;
+        }
+        .mode-btn:active { transform: scale(0.95); }
+
+        /* Settings panel */
+        .settings-panel {
+            position: fixed;
+            top: 0; right: -300px;
+            width: 280px;
+            height: 100vh;
+            background: rgba(20,20,20,0.92);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            z-index: 10;
+            transition: right 0.3s ease;
+            padding: 60px 20px 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+        .settings-panel.open { right: 0; }
+        .settings-overlay {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(0,0,0,0.4);
+            z-index: 9;
+            display: none;
+        }
+        .settings-overlay.open { display: block; }
+        .settings-panel h3 {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+        .settings-panel label {
+            font-size: 13px;
+            opacity: 0.7;
+            display: block;
+            margin-bottom: 6px;
+        }
+        .settings-panel input[type="text"] {
+            width: 100%;
+            padding: 10px 14px;
+            border: 1px solid rgba(255,255,255,0.15);
+            background: rgba(255,255,255,0.08);
+            color: #fff;
+            border-radius: 10px;
+            font-size: 15px;
+            outline: none;
+        }
+        .settings-panel input[type="text"]:focus {
+            border-color: rgba(0,122,255,0.6);
+        }
+        .settings-panel .connect-btn {
+            padding: 12px;
+            border: none;
+            background: #007aff;
+            color: #fff;
+            border-radius: 10px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        .settings-panel .connect-btn:active { opacity: 0.8; }
+        .settings-panel .disconnect-btn {
+            padding: 12px;
+            border: 1px solid rgba(255,68,68,0.5);
+            background: rgba(255,68,68,0.15);
+            color: #f66;
+            border-radius: 10px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        .settings-panel .close-settings {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            width: 32px;
+            height: 32px;
+            border: none;
+            background: rgba(255,255,255,0.1);
+            color: #fff;
+            border-radius: 50%;
+            font-size: 18px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .fps-counter {
+            font-size: 11px;
+            opacity: 0.5;
+            margin-top: auto;
+            text-align: center;
+        }
+
+        /* Destination modal */
+        .modal-overlay {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(0,0,0,0.6);
+            z-index: 20;
+            display: none;
+            align-items: center;
+            justify-content: center;
+        }
+        .modal-overlay.open { display: flex; }
+        .modal-box {
+            background: rgba(30,30,30,0.95);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-radius: 16px;
+            padding: 24px;
+            width: 85%;
+            max-width: 320px;
+        }
+        .modal-box h3 {
+            font-size: 17px;
+            margin-bottom: 12px;
+        }
+        .modal-box input {
+            width: 100%;
+            padding: 10px 14px;
+            border: 1px solid rgba(255,255,255,0.15);
+            background: rgba(255,255,255,0.08);
+            color: #fff;
+            border-radius: 10px;
+            font-size: 15px;
+            outline: none;
+            margin-bottom: 14px;
+        }
+        .modal-box input:focus { border-color: rgba(0,122,255,0.6); }
+        .modal-actions {
+            display: flex;
+            gap: 10px;
+        }
+        .modal-actions button {
+            flex: 1;
+            padding: 10px;
+            border-radius: 10px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            border: none;
+        }
+        .modal-actions .cancel-btn {
+            background: rgba(255,255,255,0.1);
+            color: #fff;
+        }
+        .modal-actions .go-btn {
+            background: #007aff;
+            color: #fff;
+        }
+
+        /* Error toast */
+        .toast {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0,0,0,0.85);
+            backdrop-filter: blur(10px);
+            color: #fff;
+            padding: 14px 24px;
+            border-radius: 12px;
+            font-size: 14px;
+            z-index: 30;
+            text-align: center;
+            max-width: 80%;
+            opacity: 0;
+            transition: opacity 0.3s;
+            pointer-events: none;
+        }
+        .toast.visible { opacity: 1; }
+    </style>
+</head>
+<body>
+
+    <!-- Camera video feed -->
+    <video id="camera-feed" autoplay playsinline muted></video>
+
+    <!-- AR overlay canvas -->
+    <canvas id="overlay-canvas"></canvas>
+
+    <!-- HUD controls -->
+    <div id="hud">
+        <!-- Top bar: status + settings -->
+        <div class="top-bar">
+            <div class="status-row">
+                <div class="status-dot" id="status-dot"></div>
+                <span class="status-text" id="status-text">Disconnected</span>
+            </div>
+            <button class="gear-btn" id="gear-btn" aria-label="Settings">⚙</button>
+        </div>
+
+        <!-- Current mode label -->
+        <div class="mode-label">
+            <span id="current-mode-label">TRANSLATE</span>
+        </div>
+
+        <!-- Navigate-mode destination button -->
+        <div class="nav-actions hidden" id="nav-actions">
+            <button class="dest-btn" id="dest-btn">📍 Set Destination</button>
+        </div>
+
+        <!-- Bottom mode switcher -->
+        <div class="bottom-bar">
+            <div class="mode-switcher">
+                <button class="mode-btn active" data-mode="translate">Translate</button>
+                <button class="mode-btn" data-mode="navigate">Navigate</button>
+                <button class="mode-btn" data-mode="detect">Detect</button>
+                <button class="mode-btn" data-mode="label_faces">Faces</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings slide-out panel -->
+    <div class="settings-overlay" id="settings-overlay"></div>
+    <div class="settings-panel" id="settings-panel">
+        <button class="close-settings" id="close-settings">✕</button>
+        <h3>Connection</h3>
+        <label>JAN Server Address</label>
+        <input type="text" id="server-ip" placeholder="192.168.1.100:8765" />
+        <button class="connect-btn" id="connect-btn">Connect</button>
+        <button class="disconnect-btn" id="disconnect-btn">Disconnect</button>
+        <div class="fps-counter" id="fps-counter">— FPS</div>
+    </div>
+
+    <!-- Destination modal -->
+    <div class="modal-overlay" id="dest-modal">
+        <div class="modal-box">
+            <h3>Set Destination</h3>
+            <input type="text" id="dest-input" placeholder="e.g. Starbucks, 123 Main St" />
+            <div class="modal-actions">
+                <button class="cancel-btn" id="dest-cancel">Cancel</button>
+                <button class="go-btn" id="dest-go">Navigate</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast notifications -->
+    <div class="toast" id="toast"></div>
+
+<script>
+(function() {
+    'use strict';
+
+    // ── State ──────────────────────────────────────────────────────
+    let ws = null;
+    let currentMode = 'translate';
+    let overlayElements = [];
+    let isStreaming = false;
+    let streamInterval = null;
+    let gpsWatchId = null;
+    let lastGps = null;
+    let framesSent = 0;
+    let fpsDisplay = 0;
+
+    // ── DOM refs ───────────────────────────────────────────────────
+    const video        = document.getElementById('camera-feed');
+    const canvas       = document.getElementById('overlay-canvas');
+    const ctx          = canvas.getContext('2d');
+    const statusDot    = document.getElementById('status-dot');
+    const statusText   = document.getElementById('status-text');
+    const gearBtn      = document.getElementById('gear-btn');
+    const settingsPanel = document.getElementById('settings-panel');
+    const settingsOverlay = document.getElementById('settings-overlay');
+    const closeSettings = document.getElementById('close-settings');
+    const serverIpInput = document.getElementById('server-ip');
+    const connectBtn   = document.getElementById('connect-btn');
+    const disconnectBtn = document.getElementById('disconnect-btn');
+    const fpsCounter   = document.getElementById('fps-counter');
+    const modeBtns     = document.querySelectorAll('.mode-btn');
+    const modeLabel    = document.getElementById('current-mode-label');
+    const navActions   = document.getElementById('nav-actions');
+    const destBtn      = document.getElementById('dest-btn');
+    const destModal    = document.getElementById('dest-modal');
+    const destInput    = document.getElementById('dest-input');
+    const destCancel   = document.getElementById('dest-cancel');
+    const destGo       = document.getElementById('dest-go');
+    const toastEl      = document.getElementById('toast');
+
+    // ── Init ───────────────────────────────────────────────────────
+    const savedIp = localStorage.getItem('jan_ar_server') || '';
+    serverIpInput.value = savedIp;
+
+    initCamera();
+    startGPS();
+    startOverlayLoop();
+    startFPSCounter();
+
+    // ── Camera ─────────────────────────────────────────────────────
+    async function initCamera() {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: {
+                    facingMode: { ideal: 'environment' },
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 }
+                },
+                audio: false
+            });
+            video.srcObject = stream;
+            video.onloadedmetadata = () => {
+                resizeCanvas();
+            };
+        } catch (err) {
+            showToast('Camera access denied. Check permissions.');
+            console.error('Camera error:', err);
+        }
+    }
+
+    function resizeCanvas() {
+        canvas.width = window.innerWidth * window.devicePixelRatio;
+        canvas.height = window.innerHeight * window.devicePixelRatio;
+        canvas.style.width = window.innerWidth + 'px';
+        canvas.style.height = window.innerHeight + 'px';
+        ctx.setTransform(window.devicePixelRatio, 0, 0, window.devicePixelRatio, 0, 0);
+    }
+    window.addEventListener('resize', resizeCanvas);
+
+    // ── Frame capture ──────────────────────────────────────────────
+    const captureCanvas = document.createElement('canvas');
+    captureCanvas.width = 320;
+    captureCanvas.height = 240;
+    const captureCtx = captureCanvas.getContext('2d');
+
+    function captureFrame() {
+        captureCtx.drawImage(video, 0, 0, 320, 240);
+        return captureCanvas.toDataURL('image/jpeg', 0.6).split(',')[1];
+    }
+
+    function startStreaming() {
+        if (isStreaming) return;
+        isStreaming = true;
+        streamInterval = setInterval(() => {
+            if (ws && ws.readyState === WebSocket.OPEN && video.readyState >= 2) {
+                const frame = captureFrame();
+                ws.send(JSON.stringify({
+                    type: 'frame',
+                    data: frame,
+                    mode: currentMode
+                }));
+                framesSent++;
+            }
+        }, 200);
+    }
+
+    function stopStreaming() {
+        isStreaming = false;
+        if (streamInterval) {
+            clearInterval(streamInterval);
+            streamInterval = null;
+        }
+    }
+
+    // ── FPS counter ────────────────────────────────────────────────
+    function startFPSCounter() {
+        setInterval(() => {
+            fpsDisplay = framesSent;
+            framesSent = 0;
+            fpsCounter.textContent = fpsDisplay + ' FPS sent';
+        }, 1000);
+    }
+
+    // ── GPS ────────────────────────────────────────────────────────
+    function startGPS() {
+        if (!('geolocation' in navigator)) return;
+        gpsWatchId = navigator.geolocation.watchPosition(
+            (pos) => {
+                lastGps = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({
+                        type: 'gps',
+                        lat: lastGps.lat,
+                        lon: lastGps.lon
+                    }));
+                }
+            },
+            (err) => console.warn('GPS error:', err),
+            { enableHighAccuracy: true, maximumAge: 5000 }
+        );
+    }
+
+    // ── WebSocket ──────────────────────────────────────────────────
+    function connect(address) {
+        if (ws) disconnect();
+
+        const url = address.startsWith('ws') ? address : 'ws://' + address;
+        statusText.textContent = 'Connecting…';
+
+        try {
+            ws = new WebSocket(url);
+        } catch (e) {
+            showToast('Invalid server address');
+            return;
+        }
+
+        ws.onopen = () => {
+            statusDot.classList.add('connected');
+            statusText.textContent = 'Connected';
+            localStorage.setItem('jan_ar_server', address);
+            showToast('Connected to JAN');
+            startStreaming();
+        };
+
+        ws.onmessage = (evt) => {
+            try {
+                const msg = JSON.parse(evt.data);
+                if (msg.type === 'overlay') {
+                    overlayElements = msg.elements || [];
+                }
+            } catch (e) {
+                console.warn('Bad message from JAN:', e);
+            }
+        };
+
+        ws.onclose = () => {
+            statusDot.classList.remove('connected');
+            statusText.textContent = 'Disconnected';
+            stopStreaming();
+            overlayElements = [];
+            ws = null;
+        };
+
+        ws.onerror = (err) => {
+            console.error('WS error:', err);
+            showToast('Connection failed');
+        };
+    }
+
+    function disconnect() {
+        if (ws) {
+            ws.close();
+            ws = null;
+        }
+        stopStreaming();
+        overlayElements = [];
+        statusDot.classList.remove('connected');
+        statusText.textContent = 'Disconnected';
+    }
+
+    // ── Overlay rendering ──────────────────────────────────────────
+    function startOverlayLoop() {
+        function render() {
+            ctx.clearRect(0, 0, canvas.width / window.devicePixelRatio, canvas.height / window.devicePixelRatio);
+
+            const vw = window.innerWidth;
+            const vh = window.innerHeight;
+
+            for (const el of overlayElements) {
+                switch (el.type) {
+                    case 'text':
+                        drawText(el, vw, vh);
+                        break;
+                    case 'box':
+                        drawBox(el, vw, vh);
+                        break;
+                    case 'arrow':
+                        drawArrow(el, vw, vh);
+                        break;
+                    case 'path':
+                        drawPath(el, vw, vh);
+                        break;
+                }
+            }
+            requestAnimationFrame(render);
+        }
+        requestAnimationFrame(render);
+    }
+
+    // Scale overlay coords (JAN sends 0-320 x, 0-240 y) to viewport
+    function sx(x, vw) { return (x / 320) * vw; }
+    function sy(y, vh) { return (y / 240) * vh; }
+
+    function drawText(el, vw, vh) {
+        const size = el.size || 16;
+        const scaledSize = Math.round(size * (vw / 320));
+        ctx.font = 'bold ' + scaledSize + 'px -apple-system, sans-serif';
+        ctx.fillStyle = el.color || '#00ff88';
+        ctx.shadowColor = 'rgba(0,0,0,0.7)';
+        ctx.shadowBlur = 4;
+        ctx.fillText(el.content || el.text || '', sx(el.x, vw), sy(el.y, vh));
+        ctx.shadowBlur = 0;
+    }
+
+    function drawBox(el, vw, vh) {
+        const x = sx(el.x, vw);
+        const y = sy(el.y, vh);
+        const w = sx(el.w || el.width || 40, vw);
+        const h = sy(el.h || el.height || 30, vh);
+        const color = el.color || '#00ff88';
+
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x, y, w, h);
+
+        if (el.label) {
+            const fontSize = Math.round(12 * (vw / 320));
+            ctx.font = 'bold ' + fontSize + 'px -apple-system, sans-serif';
+            ctx.fillStyle = color;
+            ctx.shadowColor = 'rgba(0,0,0,0.7)';
+            ctx.shadowBlur = 3;
+
+            const textWidth = ctx.measureText(el.label).width;
+            ctx.fillStyle = 'rgba(0,0,0,0.6)';
+            ctx.fillRect(x, y - fontSize - 4, textWidth + 8, fontSize + 6);
+
+            ctx.fillStyle = color;
+            ctx.fillText(el.label, x + 4, y - 4);
+            ctx.shadowBlur = 0;
+        }
+    }
+
+    function drawArrow(el, vw, vh) {
+        const x = sx(el.x, vw);
+        const y = sy(el.y, vh);
+        const angle = (el.angle || 0) * Math.PI / 180;
+        const len = (el.length || 40) * (vw / 320);
+        const color = el.color || '#00aaff';
+
+        const ex = x + Math.cos(angle) * len;
+        const ey = y + Math.sin(angle) * len;
+        const headLen = len * 0.25;
+
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 3;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(ex, ey);
+        ctx.stroke();
+
+        // Arrowhead
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.moveTo(ex, ey);
+        ctx.lineTo(
+            ex - headLen * Math.cos(angle - 0.4),
+            ey - headLen * Math.sin(angle - 0.4)
+        );
+        ctx.lineTo(
+            ex - headLen * Math.cos(angle + 0.4),
+            ey - headLen * Math.sin(angle + 0.4)
+        );
+        ctx.closePath();
+        ctx.fill();
+    }
+
+    function drawPath(el, vw, vh) {
+        const points = el.points || [];
+        if (points.length < 2) return;
+        const color = el.color || '#ffaa00';
+
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 3;
+        ctx.lineJoin = 'round';
+        ctx.lineCap = 'round';
+        ctx.setLineDash(el.dashed ? [8, 6] : []);
+        ctx.beginPath();
+        ctx.moveTo(sx(points[0].x, vw), sy(points[0].y, vh));
+        for (let i = 1; i < points.length; i++) {
+            ctx.lineTo(sx(points[i].x, vw), sy(points[i].y, vh));
+        }
+        ctx.stroke();
+        ctx.setLineDash([]);
+    }
+
+    // ── Mode switching ─────────────────────────────────────────────
+    const modeNames = {
+        translate: 'TRANSLATE',
+        navigate: 'NAVIGATE',
+        detect: 'DETECT OBJECTS',
+        label_faces: 'LABEL FACES'
+    };
+
+    modeBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            modeBtns.forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            currentMode = btn.dataset.mode;
+            modeLabel.textContent = modeNames[currentMode] || currentMode.toUpperCase();
+            navActions.classList.toggle('hidden', currentMode !== 'navigate');
+            overlayElements = [];
+        });
+    });
+
+    // ── Destination modal ──────────────────────────────────────────
+    destBtn.addEventListener('click', () => {
+        destModal.classList.add('open');
+        destInput.value = '';
+        destInput.focus();
+    });
+    destCancel.addEventListener('click', () => {
+        destModal.classList.remove('open');
+    });
+    destGo.addEventListener('click', sendDestination);
+    destInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') sendDestination();
+    });
+
+    function sendDestination() {
+        const name = destInput.value.trim();
+        if (!name) return;
+        destModal.classList.remove('open');
+
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            const msg = {
+                type: 'set_destination',
+                name: name,
+                lat: lastGps ? lastGps.lat : 0,
+                lon: lastGps ? lastGps.lon : 0
+            };
+            ws.send(JSON.stringify(msg));
+            showToast('Navigating to: ' + name);
+        } else {
+            showToast('Not connected to JAN');
+        }
+    }
+
+    // ── Settings panel ─────────────────────────────────────────────
+    gearBtn.addEventListener('click', () => {
+        settingsPanel.classList.add('open');
+        settingsOverlay.classList.add('open');
+    });
+    function closeSettingsPanel() {
+        settingsPanel.classList.remove('open');
+        settingsOverlay.classList.remove('open');
+    }
+    closeSettings.addEventListener('click', closeSettingsPanel);
+    settingsOverlay.addEventListener('click', closeSettingsPanel);
+
+    connectBtn.addEventListener('click', () => {
+        const addr = serverIpInput.value.trim();
+        if (!addr) {
+            showToast('Enter server address');
+            return;
+        }
+        connect(addr);
+        closeSettingsPanel();
+    });
+    disconnectBtn.addEventListener('click', () => {
+        disconnect();
+        showToast('Disconnected');
+    });
+
+    // ── Toast ──────────────────────────────────────────────────────
+    let toastTimer = null;
+    function showToast(msg) {
+        toastEl.textContent = msg;
+        toastEl.classList.add('visible');
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => {
+            toastEl.classList.remove('visible');
+        }, 2500);
+    }
+
+})();
+</script>
+</body>
+</html>

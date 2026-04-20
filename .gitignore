@@ -1,0 +1,18 @@
+# System temp files
+temp/
+
+# Python virtual environment
+jarvis-core/venv/
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# OS files
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Copilot tool output
+copilot-tool-output-*

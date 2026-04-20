@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JAN — Joint Autonomous Neural Agent</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <!-- Top bar -->
+    <header id="topbar">
+        <div class="topbar-left">
+            <div class="logo">
+                <span class="logo-icon">◆</span>
+                <span class="logo-text">JAN</span>
+                <span class="logo-version">v2.0</span>
+            </div>
+        </div>
+        <div class="topbar-center">
+            <div id="status-indicator" class="status online">
+                <span class="status-dot"></span>
+                <span id="status-text">ONLINE</span>
+            </div>
+        </div>
+        <div class="topbar-right">
+            <button id="btn-voice" class="topbar-btn" title="Toggle voice">
+                <span class="icon">🔊</span>
+            </button>
+            <button id="btn-agents" class="topbar-btn" title="View agents">
+                <span class="icon">⚡</span>
+            </button>
+            <button id="btn-settings" class="topbar-btn" title="Settings">
+                <span class="icon">⚙</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- Main layout -->
+    <main id="app">
+        <!-- Agent sidebar (hidden by default, toggled by ⚡ button) -->
+        <aside id="agent-panel" class="panel-hidden">
+            <div class="panel-header">
+                <h3>AGENTS</h3>
+                <button id="btn-close-agents" class="close-btn">✕</button>
+            </div>
+            <div id="agent-list"></div>
+        </aside>
+
+        <!-- Chat area -->
+        <section id="chat-container">
+            <!-- Messages -->
+            <div id="messages">
+                <div class="message system">
+                    <div class="msg-content">
+                        <span class="msg-label">SYSTEM</span>
+                        <p>JAN v2.0 online. 14 agents standing by. Say something to begin.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Input area -->
+            <div id="input-area">
+                <div id="agent-badge" class="hidden">
+                    <span id="agent-badge-name"></span>
+                    <span id="agent-badge-dismiss" title="Clear">✕</span>
+                </div>
+                <div id="input-row">
+                    <textarea id="chat-input" placeholder="Talk to JAN..." rows="1" autofocus></textarea>
+                    <button id="btn-send" title="Send">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M22 2L11 13M22 2L15 22L11 13M22 2L2 9L11 13"/>
+                        </svg>
+                    </button>
+                </div>
+                <div id="input-hints">
+                    <span>Enter to send · Shift+Enter for newline · /agent &lt;name&gt; to target agent</span>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Agent detail modal -->
+    <div id="modal-overlay" class="hidden">
+        <div id="modal">
+            <div class="modal-header">
+                <h3 id="modal-title">Agent Details</h3>
+                <button id="btn-close-modal" class="close-btn">✕</button>
+            </div>
+            <div id="modal-body"></div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

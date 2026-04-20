@@ -1,0 +1,58 @@
+2026-04-12 01:44:40,377 [INFO] [Daemon] JAN background daemon loop running
+2026-04-12 01:44:40,379 [INFO] [Daemon] JAN background daemon started
+2026-04-12 01:44:40,381 [WARNING] [Daemon] psutil not installed — skipping system health check
+2026-04-12 01:44:40,381 [INFO] [Daemon] ♥ Heartbeat — uptime: 0h 0m 0s, modules wired: 0/6, low_power: False, camera_watch: False
+2026-04-12 01:44:42,382 [INFO] [Daemon] Interval for 'health_ping' set to 120s
+2026-04-12 01:44:42,382 [INFO] [Daemon] Camera watch enabled (camera_id=1)
+2026-04-12 01:44:42,382 [INFO] [Daemon] ♥ Heartbeat — uptime: 0h 0m 2s, modules wired: 0/6, low_power: False, camera_watch: True
+2026-04-12 01:44:50,383 [INFO] [Daemon] JAN background daemon loop exited
+2026-04-12 01:44:50,383 [INFO] [Daemon] JAN background daemon stopped
+2026-04-20 02:47:05,457 [INFO] [Daemon] JAN background daemon loop running
+2026-04-20 02:47:05,457 [INFO] [Daemon] JAN background daemon started
+2026-04-20 02:47:06,467 [INFO] [Daemon] System health — CPU: 12.8%, RAM: 72.8% used (4.3 GB free), Disk: 96.0% used (9.5 GB free)
+2026-04-20 02:47:06,467 [WARNING] [Daemon] DISK ALMOST FULL: 96.0% used
+2026-04-20 02:47:06,468 [INFO] [Daemon] Pattern analysis complete — 0 patterns found
+2026-04-20 02:47:06,468 [INFO] [Daemon] Preference learning complete — {'status': 'ok', 'extracted': {}, 'message': 'No recent conversations to analyse.'}
+2026-04-20 02:47:06,468 [INFO] [Daemon] ♥ Heartbeat — uptime: 0h 0m 1s, modules wired: 6/6, low_power: False, camera_watch: False, process RSS: 190.3 MB
+2026-04-20 02:50:06,479 [INFO] [Daemon] JAN background daemon loop exited
+2026-04-20 02:50:06,479 [INFO] [Daemon] JAN background daemon stopped
+2026-04-20 02:54:07,617 [INFO] [Daemon] JAN background daemon loop running
+2026-04-20 02:54:07,617 [INFO] [Daemon] JAN background daemon started
+2026-04-20 02:54:08,619 [INFO] [Daemon] System health — CPU: 18.5%, RAM: 76.6% used (3.7 GB free), Disk: 96.0% used (9.5 GB free)
+2026-04-20 02:54:08,619 [WARNING] [Daemon] DISK ALMOST FULL: 96.0% used
+2026-04-20 02:54:08,619 [INFO] [Daemon] Pattern analysis complete — 0 patterns found
+2026-04-20 02:54:08,620 [INFO] [Daemon] Preference learning complete — {'status': 'ok', 'extracted': {}, 'message': 'No recent conversations to analyse.'}
+2026-04-20 02:54:08,620 [INFO] [Daemon] ♥ Heartbeat — uptime: 0h 0m 1s, modules wired: 6/6, low_power: False, camera_watch: False, process RSS: 191.9 MB
+2026-04-20 02:59:09,649 [INFO] [Daemon] System health — CPU: 19.7%, RAM: 86.2% used (2.2 GB free), Disk: 96.0% used (9.6 GB free)
+2026-04-20 02:59:09,649 [WARNING] [Daemon] DISK ALMOST FULL: 96.0% used
+2026-04-20 02:59:09,649 [INFO] [Daemon] ♥ Heartbeat — uptime: 0h 5m 2s, modules wired: 6/6, low_power: False, camera_watch: False, process RSS: 248.5 MB
+2026-04-20 03:04:10,667 [INFO] [Daemon] System health — CPU: 33.2%, RAM: 87.4% used (2.0 GB free), Disk: 96.0% used (9.5 GB free)
+2026-04-20 03:04:10,667 [WARNING] [Daemon] DISK ALMOST FULL: 96.0% used
+2026-04-20 03:04:10,667 [INFO] [Daemon] ♥ Heartbeat — uptime: 0h 10m 3s, modules wired: 6/6, low_power: False, camera_watch: False, process RSS: 237.9 MB
+2026-04-20 03:09:11,687 [INFO] [Daemon] System health — CPU: 22.4%, RAM: 86.2% used (2.2 GB free), Disk: 96.0% used (9.5 GB free)
+2026-04-20 03:09:11,687 [WARNING] [Daemon] DISK ALMOST FULL: 96.0% used
+2026-04-20 03:09:11,687 [INFO] [Daemon] ♥ Heartbeat — uptime: 0h 15m 4s, modules wired: 6/6, low_power: False, camera_watch: False, process RSS: 216.2 MB
+2026-04-20 03:14:12,704 [INFO] [Daemon] System health — CPU: 15.6%, RAM: 78.5% used (3.4 GB free), Disk: 96.0% used (9.5 GB free)
+2026-04-20 03:14:12,704 [WARNING] [Daemon] DISK ALMOST FULL: 96.0% used
+2026-04-20 03:14:12,704 [INFO] [Daemon] ♥ Heartbeat — uptime: 0h 20m 5s, modules wired: 6/6, low_power: False, camera_watch: False, process RSS: 178.6 MB
+2026-04-20 03:14:52,706 [INFO] [Daemon] JAN background daemon loop exited
+2026-04-20 03:14:52,706 [INFO] [Daemon] JAN background daemon stopped
+2026-04-20 03:46:43,334 [INFO] [Daemon] JAN background daemon loop running
+2026-04-20 03:46:43,334 [INFO] [Daemon] JAN background daemon started
+2026-04-20 03:46:44,345 [INFO] [Daemon] System health — CPU: 21.7%, RAM: 81.3% used (3.0 GB free), Disk: 96.0% used (9.5 GB free)
+2026-04-20 03:46:44,345 [WARNING] [Daemon] DISK ALMOST FULL: 96.0% used
+2026-04-20 03:46:44,350 [INFO] [Daemon] Pattern analysis complete — 0 patterns found
+2026-04-20 03:46:58,244 [INFO] [Daemon] Preference learning complete — {'status': 'ok', 'extracted': {'favorite_music': 'adakari', 'preferred_language': None, 'favourite_food': None, 'work_schedule': None, 'hobbies': None, 'city': 'Lahore'}, 'saved': {'favorite_music': 'adakari', 'preferred_language': None, 'favourite_food': None, 'work_schedule': None, 'hobbies': None, 'city': 'Lahore'}}
+2026-04-20 03:46:58,258 [INFO] [Daemon] ♥ Heartbeat — uptime: 0h 0m 14s, modules wired: 6/6, low_power: False, camera_watch: False, process RSS: 191.6 MB
+2026-04-20 03:48:53,284 [INFO] [Daemon] JAN background daemon loop exited
+2026-04-20 03:48:53,284 [INFO] [Daemon] JAN background daemon stopped
+2026-04-20 04:17:30,254 [INFO] [Daemon] JAN background daemon loop running
+2026-04-20 04:17:30,254 [INFO] [Daemon] JAN background daemon started
+2026-04-20 04:17:31,275 [INFO] [Daemon] System health — CPU: 21.9%, RAM: 79.8% used (3.2 GB free), Disk: 96.0% used (9.5 GB free)
+2026-04-20 04:17:31,275 [WARNING] [Daemon] DISK ALMOST FULL: 96.0% used
+2026-04-20 04:17:31,289 [INFO] [Daemon] Pattern analysis complete — 0 patterns found
+2026-04-20 04:17:46,076 [INFO] [Daemon] Preference learning complete — {'status': 'ok', 'extracted': {'favorite_music': 'adakari', 'language': 'Urdu/English', 'name': 'KhawajaAmman', 'city': 'Lahore', 'city_other': 'Islamabad'}, 'saved': {'favorite_music': 'adakari', 'language': 'Urdu/English', 'name': 'KhawajaAmman', 'city': 'Lahore', 'city_other': 'Islamabad'}}
+2026-04-20 04:17:46,090 [INFO] [Daemon] ♥ Heartbeat — uptime: 0h 0m 15s, modules wired: 6/6, low_power: False, camera_watch: False, process RSS: 237.3 MB
+2026-04-20 04:22:38,133 [INFO] [Daemon] System health — CPU: 20.7%, RAM: 86.7% used (2.1 GB free), Disk: 96.0% used (9.5 GB free)
+2026-04-20 04:22:38,133 [WARNING] [Daemon] DISK ALMOST FULL: 96.0% used
+2026-04-20 04:22:38,133 [INFO] [Daemon] ♥ Heartbeat — uptime: 0h 5m 7s, modules wired: 6/6, low_power: False, camera_watch: False, process RSS: 258.6 MB
