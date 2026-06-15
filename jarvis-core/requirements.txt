@@ -1,42 +1,85 @@
-# Core API
+# ============================================================
+# JAN — Joint Autonomous Neural Agent
+# Core runtime requirements
+# Install: pip install -r requirements.txt
+# ============================================================
+
+# --- API Framework ---
 fastapi==0.115.0
-uvicorn==0.30.1
+uvicorn[standard]==0.30.1
 pydantic==2.9.2
 python-multipart==0.0.9
 pyyaml==6.0.2
+httpx>=0.24.0
 
-# Utilities (stable with Py3.12)
-numpy==1.26.4
-scipy==1.11.4
-scikit-learn==1.4.2
-joblib==1.4.2
-typing-extensions==4.15.0
-packaging==25.0
-requests==2.32.3
-tqdm==4.66.5
-colorama==0.4.6
+# --- ML / Scientific ---
+numpy>=1.26.4
+scipy>=1.13.0
+scikit-learn>=1.4.2
+joblib>=1.4.2
+typing-extensions>=4.15.0
+packaging>=25.0
 
-# PyTorch (CUDA 12.4 – compatible set)
-torch==2.6.0+cu124
-torchaudio==2.6.0+cu124
-torchvision==0.21.0+cu124
---extra-index-url https://download.pytorch.org/whl/cu124
+# --- PyTorch (install CUDA build separately if GPU needed) ---
+torch>=2.3.0
+torchaudio>=2.3.0
+torchvision>=0.18.0
 
-# Audio / Speech (known-good versions)
-openai-whisper==20231117
-#TTS==0.23.0
-librosa==0.10.2.post1
-soundfile==0.12.1
-audioread==3.0.1
-soxr==0.3.7
-webrtcvad==2.0.10
-speechrecognition==3.10.4
-pyaudio==0.2.14
+# --- STT ---
+openai-whisper>=20231117
+soundfile>=0.12.1
+sounddevice>=0.4.6
+audioread>=3.0.1
 
-# Computer Vision
-opencv-python==4.9.0.80
-ultralytics==8.3.214
+# --- TTS ---
+edge-tts>=6.1.0
 
-# OCR / Screen Reading (for agent observation loop)
-pytesseract>=0.3.10
+# --- Audio Processing ---
+librosa>=0.10.2
+soxr>=0.3.7
+
+# --- Vector Memory (long-term memory + RAG) ---
+chromadb>=0.4.0
+sentence-transformers>=2.2.0
+
+# --- CV / Vision ---
+opencv-python>=4.9.0
 Pillow>=10.0.0
+ultralytics>=8.3.0
+
+# --- OCR ---
+pytesseract>=0.3.10
+
+# --- PC Automation ---
+pyautogui>=0.9.54
+psutil>=5.9.0
+
+# --- Web / Browser ---
+requests>=2.32.3
+websockets>=12.0
+
+# --- Utilities ---
+tqdm>=4.66.5
+colorama>=0.4.6
+
+# ============================================================
+# OPTIONAL — install manually only if you need these features
+# ============================================================
+# Voice wake-word detection:
+#   pip install pyaudio openwakeword
+#
+# Face / person recognition:
+#   pip install face-recognition resemblyzer
+#   (also requires: cmake, dlib — may need Visual C++ on Windows)
+#
+# EasyOCR (alternative to pytesseract):
+#   pip install easyocr
+#
+# Playwright (browser automation, heavier alternative):
+#   pip install playwright && playwright install chromium
+#
+# Windows service support:
+#   pip install pywin32
+#
+# VAD (voice activity detection):
+#   pip install webrtcvad   # may fail on newer Python — skip if not needed
