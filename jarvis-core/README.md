@@ -1,6 +1,6 @@
 # JAN — Joint Autonomous Neural Agent
 
-**v2.0 · 29 modules · 14 specialized agents · fully offline · self-learning**
+**v2.0 · 29 modules · 14 specialized agents · fully offline · self-learning · BYO LLM**
 
 JAN is a locally-running AI assistant that runs entirely on your machine via [Ollama](https://ollama.com). It controls your PC, browses the web, remembers everything, and autonomously learns new skills — no cloud APIs required.
 
@@ -10,7 +10,7 @@ JAN is a locally-running AI assistant that runs entirely on your machine via [Ol
 
 | Capability | How |
 |---|---|
-| Natural language chat | Ollama LLM (qwen2.5:7b / llama3.1:8b) |
+| Natural language chat | Ollama LLM (bring your own model) |
 | Speaks every response | Microsoft Edge TTS — Urdu + English auto-detect |
 | Always listening | Wake word "Hey JAN" → Whisper STT |
 | PC control | Open apps, type, click, screenshots, file ops |
@@ -59,22 +59,22 @@ User speaks / types
 
 ### 14 Agents (7 Tiers)
 
-| Tier | Agent | Model | Max Steps | Handles |
-|---|---|---|---|---|
-| 1 | chat | qwen2.5:7b-instruct | 5 | General Q&A, notes, time, weather, math |
-| 2 | browser | qwen2.5:7b-instruct | 15 | Web navigation, form filling |
-| 2 | media | qwen2.5:7b-instruct | 12 | Spotify, YouTube, app launcher |
-| 2 | communication | qwen2.5:7b-instruct | 20 | Email, messaging via browser |
-| 3 | research | qwen2.5:7b-instruct | 15 | Multi-step web research, summarization |
-| 3 | memory_agent | qwen2.5:7b-instruct | 5 | Memory recall and storage |
-| 4 | productivity | qwen2.5:7b-instruct | 8 | Notes, files, calendar, weather |
-| 4 | file | qwen2.5:7b-instruct | 10 | File/folder operations |
-| 5 | system | qwen2.5:7b-instruct | 10 | App management, system control |
-| 6 | coding | qwen2.5-coder:7b | 15 | Code writing, file editing, module generation |
-| 6 | creative | qwen2.5:7b-instruct | 12 | Writing, brainstorming |
-| 7 | automation | qwen2.5:7b-instruct | 20 | Scheduled tasks, habit automation |
-| 7 | vision | qwen2.5:7b-instruct | 8 | Screen reading, face recognition |
-| 7 | self_improvement | qwen2.5-coder:7b | 10 | Generates + hot-loads new modules |
+| Tier | Agent | Max Steps | Handles |
+|---|---|---|---|
+| 1 | chat | 5 | General Q&A, notes, time, weather, math |
+| 2 | browser | 15 | Web navigation, form filling |
+| 2 | media | 12 | Spotify, YouTube, app launcher |
+| 2 | communication | 20 | Email, messaging via browser |
+| 3 | research | 15 | Multi-step web research, summarization |
+| 3 | memory_agent | 5 | Memory recall and storage |
+| 4 | productivity | 8 | Notes, files, calendar, weather |
+| 4 | file | 10 | File/folder operations |
+| 5 | system | 10 | App management, system control |
+| 6 | coding | 15 | Code writing, file editing, module generation |
+| 6 | creative | 12 | Writing, brainstorming |
+| 7 | automation | 20 | Scheduled tasks, habit automation |
+| 7 | vision | 8 | Screen reading, face recognition |
+| 7 | self_improvement | 10 | Generates + hot-loads new modules |
 
 ---
 
@@ -100,12 +100,11 @@ brew install ffmpeg tesseract portaudio
 
 ```bash
 # Install Ollama from https://ollama.com
-ollama pull qwen2.5:7b-instruct   # primary router + 12 agents
-ollama pull qwen2.5-coder:7b      # coding + self_improvement agents
-ollama pull llama3.1:8b           # big model for complex reasoning
+# Then pull at least one LLM model for JAN to use
+ollama pull <your-model>   # e.g. llama3.1:8b, qwen2.5:7b-instruct, gemma4:12b, etc.
 ```
 
-Minimum: just `qwen2.5:7b-instruct` (~4.7 GB). The system runs fine without the others — dual_llm falls back gracefully.
+Set your chosen model in `config.yaml` under `models:` — you can assign different models to different agents.
 
 ### 3. Python 3.10+
 
@@ -131,6 +130,8 @@ venv\Scripts\activate             # Windows
 # Install dependencies
 pip install -r requirements.txt
 ```
+
+> **Linux / macOS one-click setup:** `chmod +x setup.sh && ./setup.sh` — installs system deps, creates venv, installs pip packages, and sets up directories.
 
 > **Windows one-click install:** run `install.bat` — checks Python, installs deps, pulls Ollama models.
 
@@ -200,13 +201,20 @@ settings:
   wake_word: true           # always-listening "Hey JAN" (needs pyaudio)
   ar_server: false          # AR WebSocket server (enable for phone/VR use)
   camera_watch: false       # auto-detect faces via webcam on startup
-  default_city: Islamabad   # default city for weather
+  default_city: Islamabad   # default location for weather
   orchestrator: v2          # v2 = agent-based (recommended) | v1 = single-shot
 
 models:
-  llm: "llama3.1:8b"               # big model (complex reasoning)
-  router: "qwen2.5:7b-instruct"    # agent routing + most tasks
-  coder: "qwen2.5-coder:7b"        # coding / self-improvement agents
+  llm: "<your-big-model>"           # big model (complex reasoning)
+  router: "<your-main-model>"       # agent routing + most tasks
+  coder: "<your-coder-model>"       # coding / self-improvement agents
+
+# Per-agent model overrides (defaults to models.router)
+agents:
+  models:
+    chat: "<your-chat-model>"
+    coding: "<your-coder-model>"
+    # ... override any agent's model here
 
 learning:
   auto_start: true          # start background RAG learning on boot
@@ -377,9 +385,7 @@ Then open `ar_client/index.html` on your phone and enter your PC's local IP.
 |---|---|
 | API server | FastAPI + Uvicorn |
 | LLM inference | Ollama (fully local, no cloud) |
-| Primary model | qwen2.5:7b-instruct |
-| Big model | llama3.1:8b (on-demand) |
-| Coder model | qwen2.5-coder:7b |
+| Models | Bring your own — set in config.yaml |
 | STT | OpenAI Whisper |
 | TTS | Microsoft Edge TTS (edge-tts) |
 | Vector memory | ChromaDB + sentence-transformers (all-MiniLM-L6-v2) |
@@ -396,11 +402,11 @@ Then open `ar_client/index.html` on your phone and enter your PC's local IP.
 
 ## Troubleshooting
 
-**`scipy>=1.17.1` not found**
-The `requirements.txt` has been fixed to `scipy>=1.13.0`. Run `pip install -r requirements.txt` again.
+**`scipy` version conflict**
+Run `pip install -r requirements.txt` to get the right version.
 
 **`webrtcvad` fails to compile**
-It's now listed as optional. Skip it — wake word detection falls back to energy-based VAD automatically.
+It's optional — wake word detection falls back to energy-based VAD automatically.
 
 **`No module named 'chromadb'`**
 Run `pip install chromadb sentence-transformers`.
@@ -409,7 +415,7 @@ Run `pip install chromadb sentence-transformers`.
 Install ffmpeg and ensure it's in your PATH. On Windows: `winget install ffmpeg`.
 
 **LLM not responding**
-Ensure Ollama is running (`ollama serve`) and the model is pulled (`ollama pull qwen2.5:7b-instruct`).
+Ensure Ollama is running (`ollama serve`) and your model is pulled (`ollama pull <your-model>`).
 
 **`pyautogui` fails on Linux**
 Install `python3-tk` and `python3-dev`: `sudo apt install python3-tk python3-dev`.
@@ -428,6 +434,7 @@ jarvis-core/
 ├── demo.py                    # Terminal chat (no server needed)
 ├── jan_service.py             # Windows service / standalone launcher
 ├── build_exe.py               # PyInstaller EXE builder
+├── setup.sh                   # Linux / macOS one-click installer
 ├── install.bat                # Windows one-click installer
 ├── startup.bat                # Windows Startup folder launcher
 ├── requirements.txt           # Core pip deps

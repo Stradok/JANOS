@@ -2,79 +2,71 @@
 import subprocess
 import time
 import os
+import shutil
 from .base import ModuleBase
 
 try:
     import pyautogui
     PYAUTOGUI_AVAILABLE = True
-except ImportError:
+except Exception:
     PYAUTOGUI_AVAILABLE = False
-
-try:
-    import pygetwindow as gw
-    GW_AVAILABLE = True
-except ImportError:
-    GW_AVAILABLE = False
 
 
 class SpotifyModule(ModuleBase):
     """Control Spotify — open, search, play, pause, skip, volume, playlists.
-    Uses a combo of app launching + keyboard shortcuts for reliable control."""
+    Uses keyboard shortcuts via pyautogui + Linux native control."""
 
     def __init__(self):
         super().__init__("spotify")
 
     def _is_spotify_running(self):
-        if not GW_AVAILABLE:
+        try:
+            result = subprocess.run(["pgrep", "-f", "spotify"], capture_output=True, text=True, timeout=5)
+            return result.returncode == 0
+        except (FileNotFoundError, Exception):
             return False
-        windows = gw.getWindowsWithTitle("Spotify")
-        return len(windows) > 0
 
     def _open_spotify(self):
         if self._is_spotify_running():
             return self._focus_spotify()
         try:
-            # try Windows Store version first
-            subprocess.Popen(["explorer", r"shell:AppsFolder\SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify"])
-            time.sleep(3)
-            if self._is_spotify_running():
-                return {"status": "ok", "message": "Spotify opened"}
-            # try standard exe path
-            appdata = os.environ.get("APPDATA", "")
-            spotify_path = os.path.join(appdata, "Spotify", "Spotify.exe")
-            if os.path.exists(spotify_path):
-                subprocess.Popen([spotify_path])
+            spotify = shutil.which("spotify")
+            if spotify:
+                subprocess.Popen([spotify])
                 time.sleep(3)
                 return {"status": "ok", "message": "Spotify opened"}
-            # try spotify: URI protocol (registered by Spotify installer)
             try:
-                os.startfile("spotify:")
+                subprocess.Popen(["xdg-open", "spotify:"])
                 time.sleep(3)
                 return {"status": "ok", "message": "Spotify opened via protocol"}
             except Exception:
                 pass
-            # try start menu search
+            # flatpak fallback
             try:
-                subprocess.Popen(["start", "spotify:"], shell=True)
-                time.sleep(2)
-                return {"status": "ok", "message": "Spotify opened via start"}
+                subprocess.Popen(["flatpak", "run", "com.spotify.Client"])
+                time.sleep(3)
+                return {"status": "ok", "message": "Spotify opened via flatpak"}
             except Exception:
                 pass
-            return {"error": "Could not find Spotify. Is it installed?"}
+            # snap fallback
+            try:
+                subprocess.Popen(["snap", "run", "spotify"])
+                time.sleep(3)
+                return {"status": "ok", "message": "Spotify opened via snap"}
+            except Exception:
+                pass
+            return {"error": "Could not find Spotify. Install via: snap install spotify or apt install spotify-client"}
         except Exception as e:
             return {"error": str(e)}
 
     def _focus_spotify(self):
-        if not GW_AVAILABLE:
-            return {"error": "pygetwindow not installed"}
-        windows = gw.getWindowsWithTitle("Spotify")
-        if windows:
-            try:
-                windows[0].activate()
-                return {"status": "ok", "message": "Spotify focused"}
-            except Exception:
-                pass
-        return {"error": "Spotify window not found"}
+        try:
+            subprocess.run(["xdotool", "search", "--name", "Spotify", "windowactivate"], capture_output=True, timeout=5)
+            return {"status": "ok", "message": "Spotify focused"}
+        except FileNotFoundError:
+            return {"error": "xdotool not installed"}
+        except Exception:
+            return {"error": "Spotify window not found"}
 
     def _play_pause(self):
         """Toggle play/pause using media key."""
@@ -145,7 +137,7 @@ class SpotifyModule(ModuleBase):
     def _play_uri(self, uri):
         """Open a Spotify URI directly (e.g., spotify:playlist:xxxxx)."""
         try:
-            os.startfile(uri)
+            subprocess.Popen(["xdg-open", uri])
             return {"status": "ok", "message": f"Opening {uri}"}
         except Exception as e:
             return {"error": str(e)}

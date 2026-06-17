@@ -7,7 +7,7 @@ try:
     pyautogui.FAILSAFE = True  # move mouse to corner to abort
     pyautogui.PAUSE = 0.1
     PYAUTOGUI_AVAILABLE = True
-except ImportError:
+except Exception:
     PYAUTOGUI_AVAILABLE = False
 
 

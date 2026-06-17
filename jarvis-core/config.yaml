@@ -4,9 +4,9 @@ features:
   time: true
   weather: true
   notes: true
-  stt: true
-  tts: true
-  speaker: true
+  stt: false
+  tts: false
+  speaker: false
   app_launcher: true
   keyboard_mouse: true
   file_manager: true
@@ -16,22 +16,22 @@ features:
   youtube: true
   spotify: true
   memory: true
-  smart_tts: true
+  smart_tts: false
   research_agent: true
   module_generator: true
-  proactive_learning: true
-  vision: true
+  proactive_learning: false
+  vision: false
   dual_llm: true
   person_recognition: true
   ar: true
   daemon: true
-  wake_word: true
-  screen_reader: true
-  learning_engine: true
+  wake_word: false
+  screen_reader: false
+  learning_engine: false
 
 settings:
-  auto_voice: true   # JAN auto-speaks every response
-  wake_word: true    # always-listening voice activation
+  auto_voice: false   # disabled for faster startup
+  wake_word: false    # disabled for faster startup
   ar_server: false   # AR WebSocket server (enable when using phone/VR)
   camera_watch: false # auto-detect faces via webcam
   default_city: Islamabad  # default location for weather etc.
@@ -41,8 +41,28 @@ models:
   llm: "llama3.1:8b"
   stt: "whisper"
   tts: "coqui"
-  router: "qwen2.5:7b-instruct"  # used by orchestrator to classify intents
-  coder: "qwen2.5-coder:7b"      # used by coding + self-improvement agents
+  router: "gemma4:12b"  # used by orchestrator to classify intents
+  coder: "pleasecech/qwen3.6-plus:latest"      # used by coding + self-improvement agents
+
+# === New Architecture (Phase 1+) ===
+ollama:
+  url: "http://localhost:11434"
+  timeout: 120
+  auto_pull: false   # set true to auto-pull missing models
+
+openrouter:
+  api_key: ""        # set to enable OpenRouter as fallback/provider
+
+memory:
+  path: "memory"     # relative to project root
+  compact_episodes: true
+  max_episodes: 500
+
+hardware:
+  vram_limit_gb: 7.0     # throttle when VRAM exceeds this
+  ram_limit_gb: 14.0     # throttle when RAM exceeds this
+  poll_interval: 5.0     # seconds between hardware polls
+  max_concurrent_models: 1
 
 # Agent-specific settings
 agents:

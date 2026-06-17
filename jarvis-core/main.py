@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -8,16 +9,7 @@ import yaml
 import asyncio
 import modules as modules_pkg
 
-app = FastAPI(title="JAN - Joint Autonomous Neural Agent v2.0")
-
-# Serve frontend static files
 _frontend_dir = os.path.join(os.path.dirname(__file__), "frontend")
-app.mount("/static", StaticFiles(directory=_frontend_dir), name="frontend")
-
-@app.get("/")
-def serve_frontend():
-    """Serve the JAN chat interface."""
-    return FileResponse(os.path.join(_frontend_dir, "index.html"))
 
 def load_config(path="config.yaml"):
     with open(path, "r") as f:
@@ -61,11 +53,12 @@ USE_V2 = settings.get("orchestrator", "v2") == "v2"
 
 
 # ========================
-# Startup: auto-launch daemon + Phase 1 init
+# Lifespan: startup + shutdown
 # ========================
-@app.on_event("startup")
-async def on_startup():
-    """Auto-start background services and Phase 1 components."""
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup → yield → shutdown."""
+    # ── STARTUP ──────────────────────────────────────────────────────
 
     # Phase 1: Initialize new architecture
     try:
@@ -230,18 +223,25 @@ async def on_startup():
     print(f"[JAN] v2.0 ready — {len(modules_pkg.MODULES)} modules, {len(modules_pkg.ORCHESTRATOR_V2.agents)} agents")
     print(f"[JAN] Default orchestrator: {'v2 (agent-based)' if USE_V2 else 'v1 (single-shot)'}")
 
+    # Cache available model names
+    llm = getattr(app.state, "llm", None)
+    if llm:
+        try:
+            app.state.llm_model_names = await llm.available_model_names()
+        except Exception:
+            app.state.llm_model_names = []
+    else:
+        app.state.llm_model_names = []
 
-@app.on_event("shutdown")
-async def on_shutdown():
-    """Graceful shutdown of background services."""
-    # Stop Phase 1 hardware monitor
+    yield
+
+    # ── SHUTDOWN ─────────────────────────────────────────────────────
     hw = getattr(app.state, "hardware_monitor", None)
     if hw:
         await hw.stop()
     refiner = getattr(app.state, "strategy_refiner", None)
     if refiner:
         await refiner.stop()
-    # Stop legacy services
     for name in ["daemon", "wake_word"]:
         if name in modules_pkg.MODULES:
             try:
@@ -253,6 +253,17 @@ async def on_shutdown():
             modules_pkg.MODULES["ar"].process({"action": "stop_server"})
         except Exception:
             pass
+
+
+# ========================
+# App + Static Files
+# ========================
+app = FastAPI(title="JAN - Joint Autonomous Neural Agent v2.0", lifespan=lifespan)
+app.mount("/static", StaticFiles(directory=_frontend_dir), name="frontend")
+
+@app.get("/")
+def serve_frontend():
+    return FileResponse(os.path.join(_frontend_dir, "index.html"))
 
 
 # ========================
@@ -483,23 +494,8 @@ async def phase1_status():
         "hardware": hw_load,
         "episodic_memory": ep_stats,
         "llm": llm_health,
-        "models_available": llm_model_names if llm_model_names else [],
+        "models_available": getattr(app.state, "llm_model_names", []),
     }
-
-
-@app.on_event("startup")
-async def cache_models():
-    """Cache available model names on startup."""
-    global llm_model_names
-    llm = getattr(app.state, "llm", None)
-    if llm:
-        try:
-            llm_model_names = await llm.available_model_names()
-        except Exception:
-            llm_model_names = []
-
-
-llm_model_names: list[str] = []
 
 
 @app.post("/api/chat")

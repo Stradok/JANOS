@@ -1,13 +1,20 @@
 # modules/system_control_module.py
 import subprocess
+import sys
 import os
 from .base import ModuleBase
 
 try:
     import pyautogui
     PYAUTOGUI_AVAILABLE = True
-except ImportError:
+except Exception:
     PYAUTOGUI_AVAILABLE = False
+
+try:
+    import pulsectl
+    PULSE_AVAILABLE = True
+except ImportError:
+    PULSE_AVAILABLE = False
 
 try:
     from ctypes import cast, POINTER
@@ -24,50 +31,84 @@ class SystemControlModule(ModuleBase):
     def __init__(self):
         super().__init__("system_control")
 
-    def _get_volume_interface(self):
-        if not PYCAW_AVAILABLE:
-            return None, {"error": "pycaw not installed. Run: pip install pycaw comtypes"}
-        try:
-            devices = AudioUtilities.GetSpeakers()
-            # newer pycaw: use .EndpointVolume property directly
-            if hasattr(devices, 'EndpointVolume'):
-                return devices.EndpointVolume, None
-            # older pycaw: use COM Activate
-            interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-            volume = cast(interface, POINTER(IAudioEndpointVolume))
-            return volume, None
-        except Exception as e:
-            return None, {"error": f"Failed to get audio interface: {str(e)}"}
-
     def _get_volume(self):
-        vol, err = self._get_volume_interface()
-        if err:
-            return err
-        current = vol.GetMasterVolumeLevelScalar()
-        muted = vol.GetMute()
-        return {"status": "ok", "volume": round(current * 100), "muted": bool(muted)}
+        if PULSE_AVAILABLE:
+            try:
+                with pulsectl.Pulse('jarvis-vol') as pulse:
+                    sink = pulse.get_sink_by_name(pulse.get_sink_list()[0].name)
+                    vol = round(sink.volume.value_flat * 100)
+                    muted = sink.mute
+                    return {"status": "ok", "volume": vol, "muted": muted}
+            except Exception as e:
+                pass
+        if PYCAW_AVAILABLE:
+            try:
+                devices = AudioUtilities.GetSpeakers()
+                vol_iface = devices.EndpointVolume if hasattr(devices, 'EndpointVolume') else cast(devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None), POINTER(IAudioEndpointVolume))
+                current = vol_iface.GetMasterVolumeLevelScalar()
+                muted = vol_iface.GetMute()
+                return {"status": "ok", "volume": round(current * 100), "muted": bool(muted)}
+            except Exception as e:
+                pass
+        return {"error": "Volume control requires pulsectl (Linux) or pycaw (Windows)"}
 
     def _set_volume(self, level):
-        vol, err = self._get_volume_interface()
-        if err:
-            return err
         level = max(0, min(100, level))
-        vol.SetMasterVolumeLevelScalar(level / 100.0, None)
-        return {"status": "ok", "volume": level}
+        if PULSE_AVAILABLE:
+            try:
+                with pulsectl.Pulse('jarvis-vol') as pulse:
+                    sink = pulse.get_sink_by_name(pulse.get_sink_list()[0].name)
+                    pulse.volume_set_all_chans(sink, level / 100.0)
+                    return {"status": "ok", "volume": level}
+            except Exception as e:
+                pass
+        if PYCAW_AVAILABLE:
+            try:
+                devices = AudioUtilities.GetSpeakers()
+                vol_iface = devices.EndpointVolume if hasattr(devices, 'EndpointVolume') else cast(devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None), POINTER(IAudioEndpointVolume))
+                vol_iface.SetMasterVolumeLevelScalar(level / 100.0, None)
+                return {"status": "ok", "volume": level}
+            except Exception as e:
+                pass
+        return {"error": "Volume control requires pulsectl (Linux) or pycaw (Windows)"}
 
     def _mute(self):
-        vol, err = self._get_volume_interface()
-        if err:
-            return err
-        vol.SetMute(1, None)
-        return {"status": "ok", "muted": True}
+        if PULSE_AVAILABLE:
+            try:
+                with pulsectl.Pulse('jarvis-vol') as pulse:
+                    sink = pulse.get_sink_by_name(pulse.get_sink_list()[0].name)
+                    pulse.mute(sink, True)
+                    return {"status": "ok", "muted": True}
+            except Exception as e:
+                pass
+        if PYCAW_AVAILABLE:
+            try:
+                devices = AudioUtilities.GetSpeakers()
+                vol_iface = devices.EndpointVolume if hasattr(devices, 'EndpointVolume') else cast(devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None), POINTER(IAudioEndpointVolume))
+                vol_iface.SetMute(1, None)
+                return {"status": "ok", "muted": True}
+            except Exception as e:
+                pass
+        return {"error": "Volume control requires pulsectl (Linux) or pycaw (Windows)"}
 
     def _unmute(self):
-        vol, err = self._get_volume_interface()
-        if err:
-            return err
-        vol.SetMute(0, None)
-        return {"status": "ok", "muted": False}
+        if PULSE_AVAILABLE:
+            try:
+                with pulsectl.Pulse('jarvis-vol') as pulse:
+                    sink = pulse.get_sink_by_name(pulse.get_sink_list()[0].name)
+                    pulse.mute(sink, False)
+                    return {"status": "ok", "muted": False}
+            except Exception as e:
+                pass
+        if PYCAW_AVAILABLE:
+            try:
+                devices = AudioUtilities.GetSpeakers()
+                vol_iface = devices.EndpointVolume if hasattr(devices, 'EndpointVolume') else cast(devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None), POINTER(IAudioEndpointVolume))
+                vol_iface.SetMute(0, None)
+                return {"status": "ok", "muted": False}
+            except Exception as e:
+                pass
+        return {"error": "Volume control requires pulsectl (Linux) or pycaw (Windows)"}
 
     def _volume_up(self, step=10):
         current = self._get_volume()
@@ -113,36 +154,83 @@ class SystemControlModule(ModuleBase):
 
     def _lock_screen(self):
         try:
-            subprocess.Popen(["rundll32.exe", "user32.dll,LockWorkStation"])
-            return {"status": "ok", "message": "Screen locked"}
+            for cmd in [
+                ["loginctl", "lock-session"],
+                ["gnome-screensaver-command", "-l"],
+                ["xdg-screensaver", "lock"],
+            ]:
+                try:
+                    subprocess.run(cmd, capture_output=True, timeout=5)
+                    return {"status": "ok", "message": "Screen locked"}
+                except (FileNotFoundError, Exception):
+                    continue
+            return {"error": "No screen locker found (try loginctl, gnome-screensaver-command)"}
         except Exception as e:
             return {"error": str(e)}
 
     def _shutdown(self, confirm=False):
         if not confirm:
             return {"status": "waiting_confirmation", "message": "Are you sure you want to SHUT DOWN? Send again with confirm=true"}
-        subprocess.Popen(["shutdown", "/s", "/t", "5"])
-        return {"status": "ok", "message": "Shutting down in 5 seconds..."}
+        subprocess.Popen(["systemctl", "poweroff", "-i"])
+        return {"status": "ok", "message": "Shutting down..."}
 
     def _restart(self, confirm=False):
         if not confirm:
             return {"status": "waiting_confirmation", "message": "Are you sure you want to RESTART? Send again with confirm=true"}
-        subprocess.Popen(["shutdown", "/r", "/t", "5"])
-        return {"status": "ok", "message": "Restarting in 5 seconds..."}
+        subprocess.Popen(["systemctl", "reboot", "-i"])
+        return {"status": "ok", "message": "Restarting..."}
 
     def _sleep(self):
         try:
-            subprocess.Popen(["rundll32.exe", "powrprof.dll,SetSuspendState", "0", "1", "0"])
+            subprocess.Popen(["systemctl", "suspend"])
             return {"status": "ok", "message": "Going to sleep"}
-        except Exception as e:
-            return {"error": str(e)}
+        except FileNotFoundError:
+            try:
+                subprocess.Popen(["loginctl", "suspend"])
+                return {"status": "ok", "message": "Going to sleep"}
+            except Exception as e:
+                return {"error": str(e)}
 
     def _open_url(self, url):
         try:
-            os.startfile(url)
+            import webbrowser
+            webbrowser.open(url)
             return {"status": "ok", "message": f"Opened {url} in default browser"}
         except Exception as e:
             return {"error": str(e)}
+
+    def _pip_install(self, package, upgrade=False):
+        """Install a Python package using pip from the current environment."""
+        try:
+            cmd = [sys.executable, "-m", "pip", "install"]
+            if upgrade:
+                cmd.append("--upgrade")
+            cmd.append(package)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            if result.returncode == 0:
+                return {"status": "ok", "message": f"Installed {package}", "output": result.stdout[-300:]}
+            return {"error": f"pip install failed: {result.stderr[-300:]}"}
+        except subprocess.TimeoutExpired:
+            return {"error": f"pip install timed out for {package}"}
+        except Exception as e:
+            return {"error": f"pip install error: {e}"}
+
+    def _run_shell(self, command, timeout=30):
+        """Execute an arbitrary shell command and return output."""
+        try:
+            result = subprocess.run(
+                command, shell=True, capture_output=True, text=True, timeout=timeout
+            )
+            return {
+                "status": "ok",
+                "returncode": result.returncode,
+                "stdout": result.stdout[-1000:],
+                "stderr": result.stderr[-500:],
+            }
+        except subprocess.TimeoutExpired:
+            return {"error": f"Command timed out ({timeout}s)"}
+        except Exception as e:
+            return {"error": f"Shell error: {e}"}
 
     def process(self, input_data):
         action = input_data.get("action", "")
@@ -175,5 +263,15 @@ class SystemControlModule(ModuleBase):
             return self._sleep()
         elif action == "open_url":
             return self._open_url(input_data.get("url", ""))
+        elif action == "pip_install":
+            return self._pip_install(
+                input_data.get("package", ""),
+                upgrade=input_data.get("upgrade", False)
+            )
+        elif action == "run_shell":
+            return self._run_shell(
+                input_data.get("command", ""),
+                timeout=input_data.get("timeout", 30)
+            )
         else:
-            return {"error": f"Unknown action: {action}. Use: get_volume, set_volume, volume_up, volume_down, mute, unmute, screenshot, clipboard_read, clipboard_write, lock, shutdown, restart, sleep, open_url"}
+            return {"error": f"Unknown action: {action}. Use: get_volume, set_volume, volume_up, volume_down, mute, unmute, screenshot, clipboard_read, clipboard_write, lock, shutdown, restart, sleep, open_url, pip_install, run_shell"}

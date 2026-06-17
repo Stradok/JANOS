@@ -45,12 +45,12 @@ class DualLLMModule(ModuleBase):
 
     def __init__(self):
         super().__init__("dual_llm")
-        self.small_model = "qwen2.5:1.5b"
+        self.small_model = "qwen2.5:7b-instruct"
         self.big_model = "llama3.1:8b"
         self.ollama_url = "http://localhost:11434"
         self.big_model_loaded = False
         self.last_big_model_use = None
-        self.idle_timeout = 600  # 10 minutes in seconds
+        self.idle_timeout = 600  # seconds
         self.stats = {
             "small_queries": 0,
             "big_queries": 0,
@@ -59,6 +59,21 @@ class DualLLMModule(ModuleBase):
         }
         self._lock = threading.Lock()
         self._idle_timer = None
+        self._available_models = self._fetch_available_models()
+
+    def _fetch_available_models(self):
+        """Fetch available models from Ollama, fall back to defaults on failure."""
+        try:
+            resp = requests.get(f"{self.ollama_url}/api/tags", timeout=5)
+            if resp.status_code == 200:
+                models = [m["name"] for m in resp.json().get("models", [])]
+                if models:
+                    self.big_model = next((m for m in models if "llama" in m or "gemma" in m or "qwen3" in m), models[0])
+                    self.small_model = next((m for m in models if "qwen2.5" in m and "instruct" in m), models[-1])
+                    return models
+            return []
+        except Exception:
+            return []
 
     # ── Public interface ──────────────────────────────────────────────
 

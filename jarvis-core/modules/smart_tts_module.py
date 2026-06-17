@@ -119,6 +119,8 @@ class SmartTTSModule(ModuleBase):
 
     def _play_audio(self, path):
         """Play audio file using system player."""
+        import subprocess
+        import shutil
         try:
             # try pygame first (low latency)
             try:
@@ -133,38 +135,27 @@ class SmartTTSModule(ModuleBase):
             except ImportError:
                 pass
 
-            # try ffplay (works with mp3, usually available with ffmpeg)
-            import subprocess
-            import shutil
-            ffplay = shutil.which("ffplay")
-            if ffplay:
-                subprocess.run(
-                    [ffplay, "-nodisp", "-autoexit", "-loglevel", "quiet", path],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    timeout=60
-                )
-                return
+            for player in ["ffplay", "paplay", "aplay", "mpg123", "play"]:
+                exe = shutil.which(player)
+                if exe:
+                    cmd = []
+                    if player == "ffplay":
+                        cmd = [exe, "-nodisp", "-autoexit", "-loglevel", "quiet", path]
+                    elif player == "paplay":
+                        cmd = [exe, path]
+                    elif player == "aplay":
+                        cmd = [exe, path]
+                    elif player == "mpg123":
+                        cmd = [exe, path]
+                    elif player == "play":
+                        cmd = [exe, path]
+                    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
+                    return
 
-            # fallback: PowerShell Windows Media Player COM (handles mp3)
-            subprocess.run(
-                ["powershell", "-c",
-                 f"Add-Type -AssemblyName PresentationCore; "
-                 f"$p = New-Object System.Windows.Media.MediaPlayer; "
-                 f"$p.Open([uri]'{os.path.abspath(path)}'); "
-                 f"$p.Play(); "
-                 f"Start-Sleep -Milliseconds 500; "
-                 f"while($p.Position -lt $p.NaturalDuration.TimeSpan) {{ Start-Sleep -Milliseconds 200 }}; "
-                 f"$p.Close()"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=60
-            )
+            # last resort: xdg-open
+            subprocess.run(["xdg-open", path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
         except Exception:
-            try:
-                os.startfile(path)
-            except Exception:
-                pass
+            pass
 
     def process(self, input_data):
         action = input_data.get("action", "speak")

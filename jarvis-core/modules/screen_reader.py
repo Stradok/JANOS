@@ -8,6 +8,7 @@ import os
 import json
 import time
 import base64
+import shutil
 import requests
 from pathlib import Path
 from .base import ModuleBase
@@ -15,7 +16,7 @@ from .base import ModuleBase
 try:
     import pyautogui
     PYAUTOGUI_AVAILABLE = True
-except ImportError:
+except Exception:
     PYAUTOGUI_AVAILABLE = False
 
 try:
@@ -27,9 +28,8 @@ except ImportError:
 # Try pytesseract first (lightweight)
 try:
     import pytesseract
-    # Set Tesseract path explicitly on Windows
-    _tess_path = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-    if os.path.exists(_tess_path):
+    _tess_path = shutil.which("tesseract")
+    if _tess_path:
         pytesseract.pytesseract.tesseract_cmd = _tess_path
     TESSERACT_AVAILABLE = True
 except ImportError:

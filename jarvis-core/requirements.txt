@@ -5,11 +5,11 @@
 # ============================================================
 
 # --- API Framework ---
-fastapi==0.115.0
-uvicorn[standard]==0.30.1
-pydantic==2.9.2
-python-multipart==0.0.9
-pyyaml==6.0.2
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.1
+pydantic>=2.9.2
+python-multipart>=0.0.9
+pyyaml>=6.0.2
 httpx>=0.24.0
 
 # --- ML / Scientific ---
@@ -20,32 +20,30 @@ joblib>=1.4.2
 typing-extensions>=4.15.0
 packaging>=25.0
 
-# --- PyTorch (install CUDA build separately if GPU needed) ---
+# --- PyTorch (CPU build; install CUDA build separately for GPU) ---
 torch>=2.3.0
 torchaudio>=2.3.0
-torchvision>=0.18.0
 
-# --- STT ---
+# --- STT (Speech-to-Text) ---
 openai-whisper>=20231117
 soundfile>=0.12.1
 sounddevice>=0.4.6
 audioread>=3.0.1
 
-# --- TTS ---
+# --- TTS (Text-to-Speech) ---
 edge-tts>=6.1.0
 
 # --- Audio Processing ---
 librosa>=0.10.2
 soxr>=0.3.7
 
-# --- Vector Memory (long-term memory + RAG) ---
+# --- Vector Memory (RAG + long-term memory) ---
 chromadb>=0.4.0
 sentence-transformers>=2.2.0
 
 # --- CV / Vision ---
 opencv-python>=4.9.0
 Pillow>=10.0.0
-ultralytics>=8.3.0
 
 # --- OCR ---
 pytesseract>=0.3.10
@@ -56,6 +54,8 @@ psutil>=5.9.0
 
 # --- Web / Browser ---
 requests>=2.32.3
+beautifulsoup4>=4.12.0
+lxml>=5.0.0
 websockets>=12.0
 
 # --- Utilities ---
@@ -65,21 +65,34 @@ colorama>=0.4.6
 # ============================================================
 # OPTIONAL — install manually only if you need these features
 # ============================================================
-# Voice wake-word detection:
+# Wake word detection ("Hey JAN"):
 #   pip install pyaudio openwakeword
 #
 # Face / person recognition:
 #   pip install face-recognition resemblyzer
-#   (also requires: cmake, dlib — may need Visual C++ on Windows)
+#   (also: sudo apt install cmake libdlib-dev)
 #
-# EasyOCR (alternative to pytesseract):
+# EasyOCR (GPU-accelerated OCR alternative):
 #   pip install easyocr
 #
-# Playwright (browser automation, heavier alternative):
+# Playwright (full browser automation):
 #   pip install playwright && playwright install chromium
+#
+# Windows volume control:
+#   pip install pycaw
+#
+# Linux volume control:
+#   pip install pulsectl
+#
+# YouTube audio download + playback:
+#   pip install yt-dlp
+#   sudo apt install ffmpeg
+#
+# VAD (voice activity detection):
+#   pip install webrtcvad   # may fail on Python 3.12+ — skip if not needed
 #
 # Windows service support:
 #   pip install pywin32
 #
-# VAD (voice activity detection):
-#   pip install webrtcvad   # may fail on newer Python — skip if not needed
+# Agent frameworks (Phase 2+ architecture):
+#   pip install langgraph crewai pyautogen
