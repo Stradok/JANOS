@@ -6,9 +6,11 @@ Keeps conversation context across turns. Supports agent-to-agent communication.
 """
 import json
 import re
+import uuid
 import requests
 from datetime import datetime
 from .base import ModuleBase
+from .autonomous_recovery import AutonomousRecovery, _is_error
 
 
 class OrchestratorV2Module(ModuleBase):
@@ -90,13 +92,13 @@ class OrchestratorV2Module(ModuleBase):
             "organize files", "downloads folder", "documents folder",
         ],
         "system": [
-            "open chrome", "open vscode", "open notepad", "open terminal",
+            "open chrome", "open vscode", "open terminal",
             "close chrome", "close vscode",
             "open google chrome", "close app", "launch app",
             "minimize window", "maximize window",
             "set volume", "mute", "unmute", "brightness",
             "shutdown", "restart", "lock screen", "lock computer",
-            "task manager", "system settings",
+            "system settings",
         ],
         "coding": [
             "write code", "code for ", "debug ", "fix bug", "create module",
@@ -118,6 +120,12 @@ class OrchestratorV2Module(ModuleBase):
     }
 
     # ── Priority order for keyword disambiguation ─────────────────
+    # agents that handle real tasks (not pure chat) — feedback is worth collecting
+    FEEDBACK_AGENTS = {
+        "browser", "media", "communication", "research", "file",
+        "system", "coding", "creative", "automation", "vision", "self_improvement",
+    }
+
     KEYWORD_PRIORITY = [
         "media", "communication", "system", "chat", "creative", "coding",
         "productivity", "file", "memory", "browser", "research",
@@ -131,6 +139,9 @@ class OrchestratorV2Module(ModuleBase):
         self.max_history = 30
         self.memory = None
         self.smart_tts = None
+        self.learning_engine = None
+        self.feedback = None              # wired from __init__.py
+        self.recovery = AutonomousRecovery()
         self.auto_voice = True
         self.default_city = "Islamabad"
 
@@ -224,12 +235,12 @@ If it's about playing music/videos → media. If it chains multiple tasks → au
     # ── Agent Execution ────────────────────────────────────────────
 
     def run_agent(self, agent_name, task, context=None):
-        """Run a specific agent with a task. Used by agents for delegation."""
+        """Run a specific agent. On failure, attempt autonomous recovery and retry."""
         if agent_name not in self.agents:
             return {
                 "status": "error",
                 "error": f"Agent '{agent_name}' not found. Available: {list(self.agents.keys())}",
-                "response": f"I don't have a {agent_name} agent."
+                "response": f"I don't have a {agent_name} agent.",
             }
 
         agent = self.agents[agent_name]
@@ -238,14 +249,47 @@ If it's about playing music/videos → media. If it chains multiple tasks → au
 
         try:
             result = agent.run(task, context)
-            return result
         except Exception as e:
-            return {
-                "status": "error",
-                "agent": agent_name,
-                "error": str(e),
-                "response": f"Agent '{agent_name}' crashed: {e}"
-            }
+            result = {"status": "error", "agent": agent_name,
+                      "error": str(e), "response": f"Agent '{agent_name}' crashed: {e}"}
+
+        # ── Autonomous recovery on agent error ────────────────────────
+        if result.get("status") == "error":
+            error_msg = result.get("error", "")
+            # Also check the last step's observation for module-level errors
+            steps = result.get("steps", [])
+            if steps:
+                last_obs = steps[-1].get("observation", {})
+                if isinstance(last_obs, dict) and last_obs.get("error"):
+                    error_msg = str(last_obs["error"])
+
+            if error_msg:
+                self.recovery.modules_registry = self.modules_registry
+                self.recovery.web_search       = self.modules_registry.get("web_search")
+                self.recovery.module_generator = self.modules_registry.get("module_generator")
+                self.recovery.learning_engine  = self.learning_engine
+
+                # After any fix, re-run the agent on the same task
+                def execute_fn(_action):
+                    try:
+                        return agent.run(task, context)
+                    except Exception as ex:
+                        return {"status": "error", "error": str(ex)}
+
+                recovery = self.recovery.recover(
+                    error_msg, agent_name,
+                    {"module": agent_name, "input": {"task": task}},
+                    execute_fn,
+                )
+                if recovery["recovered"]:
+                    result = recovery["result"]
+                    if isinstance(result, dict):
+                        result["auto_recovered"] = recovery["fix_applied"]
+                    print(f"[v2] Agent '{agent_name}' recovered: {recovery['fix_applied']}")
+                elif recovery["diagnosis"]:
+                    result["diagnosis"] = recovery["diagnosis"]
+
+        return result
 
     # ── Main Process ───────────────────────────────────────────────
 
@@ -315,6 +359,21 @@ If it's about playing music/videos → media. If it chains multiple tasks → au
             except Exception:
                 voice_status = "error"
 
+        # 9. Register with feedback module
+        task_id = str(uuid.uuid4())[:8]
+        if self.feedback and agent_name in self.FEEDBACK_AGENTS:
+            try:
+                self.feedback.register_task(
+                    task_id=task_id,
+                    user_input=user_message,
+                    agent_used=agent_name,
+                    modules_used=list(self.agents[agent_name].tools.keys())
+                                 if agent_name in self.agents else [],
+                    response_text=response,
+                )
+            except Exception:
+                pass
+
         return {
             "status": result.get("status", "ok"),
             "agent": agent_name,
@@ -323,4 +382,7 @@ If it's about playing music/videos → media. If it chains multiple tasks → au
             "steps_taken": result.get("steps_taken", 0),
             "steps": result.get("steps", []),
             "voice": voice_status,
+            "task_id": task_id,
+            "auto_recovered": result.get("auto_recovered"),
+            "diagnosis": result.get("diagnosis"),
         }

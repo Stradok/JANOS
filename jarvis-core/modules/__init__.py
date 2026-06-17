@@ -28,6 +28,8 @@ from .ar_module import ARModule
 from .daemon_module import DaemonModule
 from .wake_word_module import WakeWordModule
 from .learning_engine import LearningEngine
+from .autonomous_recovery import AutonomousRecovery
+from .feedback_module import FeedbackModule
 
 # v2: Agent-based architecture
 from .screen_reader import ScreenReader
@@ -137,26 +139,32 @@ MODULE_SCHEMAS = {
         "output": {"status": "ok", "message": "string"}
     },
     "file_manager": {
-        "description": "Manage files and folders. List directory contents, read files, create/move/copy/delete files, search for files.",
+        "description": "Manage files and folders. List directory contents, read files, create/move/copy/delete files, search for files, run shell commands, execute Python code inline.",
         "input": {
-            "action": "string (list/read/create_file/create_dir/move/copy/delete/search/info)",
+            "action": "string (list/read/create_file/create_dir/move/copy/delete/search/info/run/run_python)",
             "path": "string (file or directory path)",
             "destination": "string (for move/copy)",
             "content": "string (for create_file)",
             "pattern": "string (for search, e.g. '*.py', '*.txt')",
-            "confirm": "bool (required true for delete)"
+            "confirm": "bool (required true for delete)",
+            "command": "string (for run, shell command to execute)",
+            "code": "string (for run_python, Python code snippet)",
+            "timeout": "int (for run/run_python, default 30)"
         },
-        "output": {"status": "ok", "message": "string or file data"}
+        "output": {"status": "ok", "message": "string"}
     },
     "system_control": {
-        "description": "Control system settings. Volume, mute, screenshot, clipboard, lock screen, shutdown, restart, sleep, open URLs.",
+        "description": "Control system settings. Volume, mute, screenshot, clipboard, lock screen, shutdown, restart, sleep, open URLs, install pip packages, run shell commands.",
         "input": {
-            "action": "string (get_volume/set_volume/volume_up/volume_down/mute/unmute/screenshot/clipboard_read/clipboard_write/lock/shutdown/restart/sleep/open_url)",
+            "action": "string (get_volume/set_volume/volume_up/volume_down/mute/unmute/screenshot/clipboard_read/clipboard_write/lock/shutdown/restart/sleep/open_url/pip_install/run_shell)",
             "level": "int 0-100 (for set_volume)",
             "step": "int (for volume_up/down, default 10)",
             "text": "string (for clipboard_write)",
             "url": "string (for open_url)",
-            "confirm": "bool (required true for shutdown/restart)"
+            "confirm": "bool (required true for shutdown/restart)",
+            "package": "string (for pip_install, name of PyPI package)",
+            "command": "string (for run_shell, shell command to execute)",
+            "timeout": "int (for run_shell, default 30)"
         },
         "output": {"status": "ok", "message": "string"}
     },
@@ -432,6 +440,8 @@ LEARNING_ENGINE = LearningEngine()
 LEARNING_ENGINE.memory = MODULES["memory"]
 LEARNING_ENGINE.web_search = MODULES["web_search"]
 MODULES["learning_engine"] = LEARNING_ENGINE
+# Wire learning engine into orchestrator for self-healing
+ORCHESTRATOR.learning_engine = LEARNING_ENGINE
 
 # Tool sets for each agent (which modules each agent can use)
 _AGENT_TOOL_MAP = {
@@ -473,6 +483,7 @@ _AGENT_MODELS = {
 ORCHESTRATOR_V2 = OrchestratorV2Module()
 ORCHESTRATOR_V2.memory = MODULES["memory"]
 ORCHESTRATOR_V2.smart_tts = MODULES["smart_tts"]
+ORCHESTRATOR_V2.learning_engine = LEARNING_ENGINE
 ORCHESTRATOR_V2.auto_voice = ORCHESTRATOR.auto_voice
 ORCHESTRATOR_V2.default_city = ORCHESTRATOR.default_city
 
@@ -491,3 +502,20 @@ for agent_name, AgentClass in AGENT_CLASSES.items():
 
 LEARNING_ENGINE.orchestrator = ORCHESTRATOR_V2
 print(f"[JAN] v2 Agent orchestrator ready — {len(ORCHESTRATOR_V2.agents)} agents registered")
+
+# ========================
+# Autonomous Recovery + Feedback
+# ========================
+FEEDBACK = FeedbackModule()
+FEEDBACK.learning_engine = LEARNING_ENGINE
+MODULES["feedback"] = FEEDBACK
+
+# Wire feedback into both orchestrators
+ORCHESTRATOR.feedback = FEEDBACK
+ORCHESTRATOR_V2.feedback = FEEDBACK
+
+# Wire recovery engine dependencies (shared instance in each orchestrator
+# gets its refs patched at call-time, but pre-wire learning_engine now)
+ORCHESTRATOR.recovery.learning_engine   = LEARNING_ENGINE
+ORCHESTRATOR_V2.recovery.learning_engine = LEARNING_ENGINE
+print("[JAN] Autonomous recovery engine and feedback module ready")

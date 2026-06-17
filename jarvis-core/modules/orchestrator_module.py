@@ -1,9 +1,11 @@
 # modules/orchestrator_module.py
 import json
 import re
+import uuid
 import requests
 from datetime import datetime
 from .base import ModuleBase
+from .autonomous_recovery import AutonomousRecovery, extract_error_from_result, _is_error
 
 
 class OrchestratorModule(ModuleBase):
@@ -51,7 +53,7 @@ class OrchestratorModule(ModuleBase):
         "navigate": "browser",
     }
 
-    SYSTEM_PROMPT = """You are JAN (Joint Autonomous Neural Agent). You are a personal AI assistant running on a Windows PC in Islamabad, Pakistan. You are loyal, warm, and proactive.
+    SYSTEM_PROMPT = """You are JAN (Joint Autonomous Neural Agent). You are a personal AI assistant running on a Linux PC in Islamabad, Pakistan. You are loyal, warm, and proactive.
 
 RULES:
 - Your name is Jan. Your creator is a person named Amman (NOT the city). Call him "Sir".
@@ -67,9 +69,9 @@ YOUR MODULES (use EXACT names):
 - spotify: control Spotify. Input: {{"action": "open"}} or {{"action": "search", "query": "song name"}}
 - browser: open any URL. Input: {{"action": "open", "url": "https://..."}}
 - app_launcher: open/close any app on PC. Input: {{"action": "open", "name": "spotify"}} — apps: spotify, opera gx, chrome, vscode, cursor, notepad, calculator, terminal, file explorer, task manager, settings
-- file_manager: list/read/search files. Input: {{"action": "search", "path": "C:\\Users", "pattern": "*.pdf"}}
+- file_manager: list/read/search/create/move/copy/delete files, run shell commands, execute python. Input: {{"action": "search", "path": "/home", "pattern": "*.pdf"}} or {{"action": "run", "command": "pip install pyautogui"}} or {{"action": "run_python", "code": "print('hello')"}}
 - keyboard_mouse: type text, press keys, click, screenshot. Input: {{"action": "type", "text": "..."}}
-- system_control: volume, clipboard, lock, shutdown, open URLs. Input: {{"action": "set_volume", "level": 50}} or {{"action": "open_url", "url": "https://..."}}
+- system_control: volume, clipboard, lock, shutdown, open URLs, install pip packages, run shell commands. Input: {{"action": "set_volume", "level": 50}} or {{"action": "open_url", "url": "https://..."}} or {{"action": "pip_install", "package": "pyautogui"}} or {{"action": "run_shell", "command": "pip install pyautogui"}}
 - notes: save/list notes. Input: {{"action": "add", "text": "..."}}
 - memory: remember/recall things. Input: {{"action": "recall", "query": "..."}}
 - smart_tts: speak out loud. Input: {{"action": "speak", "text": "..."}}
@@ -96,6 +98,9 @@ CRITICAL RULES:
 - research_agent is for deep multi-step research only. Simple searches → web_search.
 - DO NOT invent module names. Only use names from the list above.
 - DO NOT invent action names. Only use actions listed for each module.
+- If user asks to install a Python package → use system_control with action "pip_install" and "package" name
+- If user asks to run a shell command → use system_control with action "run_shell" and "command"
+- If user asks to execute a Python script → use file_manager with action "run_python" and "code" or "run" with "command"
 - User's name is Amman (a person, NOT the city in Jordan). He built you.
 - You are running on his PC. You have full control. Act like you own the PC.
 
@@ -139,8 +144,13 @@ User: "hello Jan"
         self.memory = None  # will be set after memory module is created
         self.smart_tts = None  # will be set after smart_tts module is created
         self.dual_llm = None  # will be set for smart model routing
+        self.learning_engine = None  # will be set for self-healing
         self.auto_voice = True  # auto-speak every response
         self.default_city = "Islamabad"  # user's default location
+        self.recovery = AutonomousRecovery()   # autonomous error recovery engine
+        self.feedback = None                    # wired from __init__.py
+        self._heal_count = 0
+        self._heal_successes = 0
 
     def _build_system_prompt(self):
         return self.SYSTEM_PROMPT.format(
@@ -418,6 +428,84 @@ User: "hello Jan"
 
         return None  # No keyword match — treat as pure chat
 
+    def _has_action_error(self, action_result):
+        """Check if action result contains an error."""
+        if isinstance(action_result, dict):
+            result = action_result.get("result", action_result)
+            if isinstance(result, dict) and result.get("error"):
+                return True
+        if isinstance(action_result, list):
+            return any(
+                ar.get("error") or
+                (isinstance(ar.get("result"), dict) and ar["result"].get("error"))
+                for ar in action_result
+            )
+        return False
+
+    def _get_action_error(self, action_result):
+        """Extract error message from action result."""
+        if isinstance(action_result, dict):
+            result = action_result.get("result", action_result)
+            if isinstance(result, dict) and result.get("error"):
+                return result["error"], action_result.get("module", "")
+        if isinstance(action_result, list):
+            for ar in action_result:
+                if ar.get("error"):
+                    return ar["error"], ar.get("module", "")
+                if isinstance(ar.get("result"), dict) and ar["result"].get("error"):
+                    return ar["result"]["error"], ar.get("module", "")
+        return "", ""
+
+    def _attempt_recovery(self, action_result, original_action) -> dict | None:
+        """
+        Delegate error recovery to AutonomousRecovery.
+        Returns healed action_result or None if recovery failed.
+        """
+        error_msg, module_name = self._get_action_error(action_result)
+        if not error_msg:
+            return None
+
+        # Wire modules_registry and learning_engine into recovery engine
+        self.recovery.modules_registry = self.modules_registry
+        self.recovery.web_search       = self.modules_registry.get("web_search")
+        self.recovery.module_generator = self.modules_registry.get("module_generator")
+        self.recovery.learning_engine  = self.learning_engine
+
+        # execute_fn: re-run the original action after any fix is applied
+        def execute_fn(action):
+            return self._execute_action(action)
+
+        recovery = self.recovery.recover(error_msg, module_name, original_action, execute_fn)
+
+        if recovery["recovered"]:
+            self._heal_count += 1
+            self._heal_successes += 1
+            result = recovery["result"]
+            if isinstance(result, dict):
+                result["auto_heal"] = recovery["fix_applied"]
+            return result
+
+        # Recovery failed — log to learning engine
+        if self.learning_engine:
+            try:
+                self.learning_engine.process({
+                    "action": "record_skill",
+                    "agent": "orchestrator",
+                    "tool": module_name or "unknown",
+                    "tool_action": "process",
+                    "input_pattern": {},
+                    "outcome": "error",
+                    "error_msg": error_msg[:300],
+                })
+            except Exception:
+                pass
+
+        # Return the diagnosis so it can be surfaced to the user
+        if recovery["diagnosis"]:
+            return {"error": True, "diagnosis": recovery["diagnosis"],
+                    "auto_heal": None, "module": module_name}
+        return None
+
     def process(self, input_data):
         """
         Main entry point.
@@ -464,16 +552,31 @@ User: "hello Jan"
         # 3. Execute any module actions
         action_result = self._execute_action(action)
 
+        # 3b. Autonomous recovery: if the module returned an error, try all fix strategies
+        healed = False
+        recovery_diagnosis = ""
+        if action_result and self._has_action_error(action_result):
+            heal_result = self._attempt_recovery(action_result, action)
+            if heal_result:
+                healed = not _is_error(heal_result)
+                recovery_diagnosis = heal_result.get("diagnosis", "")
+                action_result = heal_result
+
         # 4. Build final response — include module result data when useful
         final_response = response
         if action_result and not isinstance(action_result, list):
+            if action_result.get("auto_heal"):
+                heal_msg = action_result["auto_heal"]
+                if heal_msg:
+                    final_response = f"{response}\n\n[Auto-fixed: {heal_msg}]"
             result_data = action_result.get("result", action_result)
             if isinstance(result_data, dict):
                 if result_data.get("error"):
-                    final_response = f"{response}\n\n⚠️ Module error: {result_data['error']}"
+                    diag = recovery_diagnosis or result_data["error"]
+                    final_response = f"{response}\n\n⚠️ {diag}"
                 elif result_data.get("status") == "ok":
-                    # Append useful result info to response
-                    useful = result_data.get("summary") or result_data.get("message") or result_data.get("output") or result_data.get("answer")
+                    useful = (result_data.get("summary") or result_data.get("message")
+                              or result_data.get("output") or result_data.get("answer"))
                     if useful and str(useful) not in response:
                         final_response = f"{response}\n\n{useful}"
         elif action_result and isinstance(action_result, list):
@@ -518,6 +621,23 @@ User: "hello Jan"
             except Exception:
                 voice_status = "error"
 
+        # 8. Register task with feedback module (enables /feedback endpoint)
+        task_id = str(uuid.uuid4())[:8]
+        modules_used = []
+        if action and isinstance(action, dict):
+            modules_used = [action.get("module", "")]
+        if self.feedback and action:  # only request feedback for module actions, not pure chat
+            try:
+                self.feedback.register_task(
+                    task_id=task_id,
+                    user_input=user_message,
+                    agent_used="orchestrator_v1",
+                    modules_used=modules_used,
+                    response_text=final_response,
+                )
+            except Exception:
+                pass
+
         return {
             "status": "ok",
             "thought": thought,
@@ -525,5 +645,7 @@ User: "hello Jan"
             "action": action,
             "action_result": action_result,
             "voice": voice_status,
-            "raw_llm": raw_llm
+            "raw_llm": raw_llm,
+            "task_id": task_id,
+            "recovered": healed,
         }
