@@ -147,7 +147,22 @@ ISSUES: comma-separated list
 SCORE: -1.0 to 1.0
 SUGGESTION: how to fix (if issues found)"""
         result = await self.think(prompt)
-        return {"raw": result, "valid": "yes" in result.lower().split("\n")[0] if result else True}
+        valid = True
+        score = 0.7  # default optimistic when LLM doesn't parse clearly
+        if result:
+            lines = result.strip().split("\n")
+            first = lines[0].lower() if lines else ""
+            valid = "yes" in first
+            for line in lines:
+                ll = line.lower().strip()
+                if ll.startswith("score:"):
+                    try:
+                        score = float(ll.split(":", 1)[1].strip())
+                        score = max(-1.0, min(1.0, score))
+                    except ValueError:
+                        pass
+                    break
+        return {"raw": result, "valid": valid, "score": score}
 
     async def diagnose_failure(self, task: str, errors: list[str], past_failures: str = "") -> str:
         context = f"Similar past failures:\n{past_failures}" if past_failures else ""

@@ -159,21 +159,30 @@ class FeedbackModule(ModuleBase):
 
     def _update_skill_score(self, agent_used: str, modules_used: list,
                              rating: int, comment: str, outcome_score: float):
-        """Push feedback rating into learning engine skill memory."""
-        if not self.learning_engine:
-            return
+        """Push feedback rating into learning engine skill memory and ScoringEngine."""
         outcome = "success" if rating >= 4 else ("partial" if rating == 3 else "error")
+        if self.learning_engine:
+            try:
+                self.learning_engine.process({
+                    "action": "record_skill",
+                    "agent": agent_used,
+                    "tool": "task_outcome",
+                    "tool_action": "user_rated",
+                    "input_pattern": {"rating": rating, "modules": modules_used},
+                    "outcome": outcome,
+                    "error_msg": comment if rating < 3 else "",
+                    "correction": f"User rated {rating}/5: {comment}" if comment else f"User rated {rating}/5",
+                })
+            except Exception:
+                pass
+        # Phase 5: bridge to ScoringEngine utility scores
         try:
-            self.learning_engine.process({
-                "action": "record_skill",
-                "agent": agent_used,
-                "tool": "task_outcome",
-                "tool_action": "user_rated",
-                "input_pattern": {"rating": rating, "modules": modules_used},
-                "outcome": outcome,
-                "error_msg": comment if rating < 3 else "",
-                "correction": f"User rated {rating}/5: {comment}" if comment else f"User rated {rating}/5",
-            })
+            from core.scoring import ScoringEngine
+            ScoringEngine().record_action(
+                agent_used,
+                success=(rating >= 4),
+                user_feedback=comment or f"rated {rating}/5",
+            )
         except Exception:
             pass
 

@@ -82,14 +82,16 @@ class RoutingEngine:
         now = datetime.now(tz=timezone.utc).isoformat()
         with sqlite3.connect(self.db_path) as conn:
             existing = conn.execute(
-                "SELECT success_count, failure_count FROM model_scores WHERE model_name = ? AND task_type = ?",
+                "SELECT success_count, failure_count, avg_score FROM model_scores WHERE model_name = ? AND task_type = ?",
                 (model_name, task_type),
             ).fetchone()
             if existing:
-                sc, fc = existing
+                sc, fc, old_avg = existing
+                total_old = sc + fc
                 sc += 1 if success else 0
                 fc += 0 if success else 1
-                avg = (score + (sc + fc)) / max(1, sc + fc)
+                total_new = sc + fc
+                avg = (old_avg * total_old + score) / max(1, total_new)
                 conn.execute(
                     """UPDATE model_scores SET success_count=?, failure_count=?,
                        avg_score=?, last_used=? WHERE model_name=? AND task_type=?""",

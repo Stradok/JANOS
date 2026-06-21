@@ -170,7 +170,7 @@ async def lifespan(app: FastAPI):
                 routing_engine=app.state.routing_engine,
                 llm=llm,
             )
-            await app.state.strategy_refiner.start()
+            await app.state.strategy_refiner.start(run_immediately=True)
 
             print(f"[JAN] Phase 2-5 initialized: {len(agents)} agents, command interface, privilege system, strategy refiner")
         except ImportError as e:
@@ -644,6 +644,20 @@ async def v2_chat(req: V2ChatRequest):
         if agents.get("critic"):
             val = await agents["critic"].validate(ctx.agent_output, req.input, ctx.errors)
             ctx.outcome_score = val.get("score", 0.0)
+
+            # Phase 3: self-healing retry when critic rejects
+            while not val.get("valid", True) and ctx.retry_count < ctx.max_retries:
+                ctx.retry_count += 1
+                ctx.reasoning_steps.append(
+                    f"Critic rejected (score={val.get('score', 0):.1f}), retry {ctx.retry_count}/{ctx.max_retries}"
+                )
+                feedback = (val.get("raw") or "Output rejected")[:300]
+                retry_prompt = (
+                    f"{ctx.task_plan}\n\nPrevious attempt was rejected:\n{feedback}\n\nFix the issues and retry."
+                )
+                ctx.agent_output = await agents["executor"].execute_step(retry_prompt)
+                val = await agents["critic"].validate(ctx.agent_output, req.input, ctx.errors)
+                ctx.outcome_score = val.get("score", 0.0)
     else:
         ctx.final_output = f"[Phase 2] Pipeline not initialized. Input: {req.input[:100]}"
 
@@ -659,6 +673,31 @@ async def v2_chat(req: V2ChatRequest):
             duration_ms=ctx.duration_ms,
             errors=ctx.errors,
         )
+
+    # Phase 3: record outcome in routing engine
+    routing_eng = getattr(app.state, "routing_engine", None)
+    if routing_eng and ctx.selected_agent:
+        routing_eng.record_agent_result(
+            ctx.selected_agent,
+            success=ctx.outcome_score >= 0,
+            score=max(-1.0, min(1.0, ctx.outcome_score)),
+        )
+    if routing_eng and ctx.selected_model and ctx.task_type:
+        routing_eng.record_model_result(
+            ctx.selected_model,
+            ctx.task_type,
+            success=ctx.outcome_score >= 0,
+            score=max(-1.0, min(1.0, ctx.outcome_score)),
+        )
+
+    # Phase 5: record action score in ScoringEngine
+    try:
+        from core.scoring import ScoringEngine
+        _se = ScoringEngine()
+        if ctx.selected_agent:
+            _se.record_action(ctx.selected_agent, success=ctx.outcome_score >= 0)
+    except Exception:
+        pass
 
     return {
         "response": response_text,
@@ -831,6 +870,17 @@ async def v5_generate_tool(capability: str):
         return {"error": "Strategy refiner not initialized"}
     result = await refiner.generate_module_stub(capability)
     return result
+
+
+@app.get("/api/v5/scores")
+async def v5_scores():
+    """Utility scores for all agents and actions (ScoringEngine)."""
+    try:
+        from core.scoring import ScoringEngine
+        se = ScoringEngine()
+        return {"scores": se.get_ranked_actions()}
+    except Exception as e:
+        return {"error": str(e), "scores": []}
 
 
 # ========================

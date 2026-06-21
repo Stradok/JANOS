@@ -10,7 +10,9 @@
 ```
 jarvis-core/
 │
-├── main.py                  # FastAPI entry — legacy v1/v2 + new Phases 1-5 API
+├── main.py                  # FastAPI entry
+├── chat.py                  # Server CLI — Phase 2-5 chat via HTTP
+├── demo.py                  # Terminal chat + voice mode (standalone) — legacy v1/v2 + new Phases 1-5 API
 ├── config.yaml              # Central config: ollama, hardware, memory, agents
 ├── setup.sh                 # Linux one-click installer
 ├── requirements.txt         # Dependencies
@@ -144,8 +146,8 @@ jarvis-core/
 │                       │          │   Hardware Monitor (nvidia-smi + psutil)     │
 │                       │          │   Command Interface (/command)               │
 │                       │          │   Privilege System (sudo-aware shell)        │
-│                       │          │   Strategy Refiner (24h background loop)     │
-│                       │          │   Routing Engine (scoring feedback loop)     │
+│                       │          │   Strategy Refiner (startup + 24h loop) [P5]     │
+│                       │          │   Routing Engine (wired to v2/chat) [P3]     │
 │                       │          │   Log Bootstrap (@logs/*.md)                 │
 └──────────────────────┘          └─────────────────────────────────────────────┘
 ```
@@ -428,6 +430,7 @@ core/config.py (singleton)
 |--------|------|-------------|
 | POST | `/api/v5/refine` | Trigger strategy refinement |
 | POST | `/api/v5/generate-tool` | Generate new tool stub |
+| GET | `/api/v5/scores` | Utility scores for all agents/actions (ScoringEngine) |
 
 ---
 

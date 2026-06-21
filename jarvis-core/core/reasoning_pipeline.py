@@ -75,10 +75,11 @@ class ReasoningPipeline:
                 task=ctx.user_input,
                 errors=ctx.errors,
             )
+            ctx.outcome_score = validation.get("score", 0.7)
             if not validation.get("valid", True):
                 ctx.errors.append(validation.get("raw", "Critic rejected output")[:200])
         else:
-            ctx.outcome_score = 0.0
+            ctx.outcome_score = 0.7 if ctx.agent_output else 0.0
 
         ctx.reasoning_steps.append("Pipeline: store episode")
         ctx.episode_id = await self.memory.store_episode(

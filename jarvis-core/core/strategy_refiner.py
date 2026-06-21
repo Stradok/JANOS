@@ -39,10 +39,15 @@ class StrategyRefiner:
         self._task: asyncio.Task | None = None
         self._running = False
 
-    async def start(self):
+    async def start(self, run_immediately: bool = False):
         if self._running:
             return
         self._running = True
+        if run_immediately:
+            try:
+                await self.run_refinement()
+            except Exception as e:
+                print(f"[StrategyRefiner] Startup refinement error: {e}")
         self._task = asyncio.create_task(self._loop())
 
     async def stop(self):
