@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JANOS Architecture</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0f172a; color: #e2e8f0; font-family: 'Segoe UI', system-ui, sans-serif; padding: 40px; }
+  h1 { text-align: center; font-size: 2.2em; margin-bottom: 8px; background: linear-gradient(135deg, #60a5fa, #a78bfa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  .subtitle { text-align: center; color: #64748b; margin-bottom: 40px; font-size: 0.95em; }
+  .diagram-container { max-width: 1500px; margin: 0 auto; background: #1e293b; border-radius: 16px; padding: 30px; overflow-x: auto; }
+  svg { width: 100%; height: auto; display: block; }
+  .node-box { fill: #334155; stroke: #475569; stroke-width: 2; rx: 8; ry: 8; }
+  .node-box-highlight { fill: #1e3a5f; stroke: #3b82f6; stroke-width: 2.5; rx: 8; ry: 8; }
+  .node-label { fill: #f1f5f9; font-size: 13px; font-family: 'Segoe UI', sans-serif; text-anchor: middle; dominant-baseline: central; }
+  .node-sublabel { fill: #94a3b8; font-size: 10px; font-family: 'Segoe UI', sans-serif; text-anchor: middle; dominant-baseline: central; }
+  .edge { stroke: #475569; stroke-width: 2; fill: none; }
+  .edge-new { stroke: #3b82f6; stroke-width: 2; fill: none; }
+  .edge-arrow { fill: #475569; }
+  .edge-arrow-new { fill: #3b82f6; }
+  .edge-label { fill: #64748b; font-size: 10px; font-family: 'Segoe UI', sans-serif; text-anchor: middle; }
+  .section-title { fill: #f1f5f9; font-size: 14px; font-weight: bold; font-family: 'Segoe UI', sans-serif; text-anchor: middle; }
+  .legend-item { font-size: 11px; font-family: 'Segoe UI', sans-serif; }
+  .phase1 { fill: #1e3a5f; stroke: #60a5fa; stroke-width: 2; rx: 6; ry: 6; }
+  .phase2 { fill: #2d1b5e; stroke: #a78bfa; stroke-width: 2; rx: 6; ry: 6; }
+  .phase3 { fill: #1e3a2d; stroke: #34d399; stroke-width: 2; rx: 6; ry: 6; }
+  .phase4 { fill: #3a1e1e; stroke: #f87171; stroke-width: 2; rx: 6; ry: 6; }
+  .phase5 { fill: #3a2d1e; stroke: #fbbf24; stroke-width: 2; rx: 6; ry: 6; }
+  .badge { rx: 4; ry: 4; }
+  .badge-text { fill: #fff; font-size: 9px; font-family: 'Segoe UI', sans-serif; text-anchor: middle; dominant-baseline: central; }
+</style>
+</head>
+<body>
+
+<h1>JANOS Architecture &amp; Data Flow</h1>
+<p class="subtitle">Joint Autonomous Neural Agent — 5-Phase Architecture (Phases 1–5 Built)</p>
+
+<div class="diagram-container">
+<svg viewBox="0 0 1400 1200" xmlns="http://www.w3.org/2000/svg">
+
+  <!-- ===== LEGEND ===== -->
+  <rect x="20" y="10" width="70" height="20" class="badge" fill="#64748b" />
+  <text x="55" y="21" class="badge-text" fill="#cbd5e1">LEGACY</text>
+  <rect x="95" y="10" width="60" height="20" class="badge" fill="#3b82f6" />
+  <text x="125" y="21" class="badge-text">NEW</text>
+
+  <!-- ===== TOP: USER INPUT ===== -->
+  <rect x="580" y="50" width="240" height="45" class="node-box-highlight" />
+  <text x="700" y="67" class="node-label" fill="#60a5fa">User Input</text>
+  <text x="700" y="82" class="node-sublabel">Text / API</text>
+
+  <line x1="700" y1="95" x2="700" y2="120" class="edge" />
+  <polygon points="700,125 695,115 705,115" class="edge-arrow" />
+
+  <!-- ===== FASTAPI SERVER ===== -->
+  <rect x="430" y="130" width="540" height="55" class="node-box" />
+  <text x="700" y="148" class="section-title">FastAPI Server (main.py) — port 8000</text>
+  <text x="700" y="165" class="node-sublabel">uvicorn — 22 new endpoints + legacy v1/v2</text>
+
+  <!-- Split: Legacy left, New right -->
+  <line x1="580" y1="185" x2="580" y2="220" class="edge" />
+  <polygon points="580,225 575,215 585,215" class="edge-arrow" />
+  <line x1="820" y1="185" x2="820" y2="220" class="edge-new" />
+  <polygon points="820,225 815,215 825,215" class="edge-arrow-new" />
+
+  <text x="580" y="210" class="edge-label">Legacy API</text>
+  <text x="820" y="210" class="edge-label" fill="#3b82f6">New API (Phases 1–5)</text>
+
+  <!-- ================================================================== -->
+  <!-- ===== LEFT COLUMN: LEGACY SYSTEM (unchanged) ===== -->
+  <!-- ================================================================== -->
+
+  <rect x="300" y="230" width="560" height="200" class="node-box" rx="10" ry="10" />
+  <text x="580" y="250" class="section-title" fill="#94a3b8">Legacy Engine (v1 + v2 — Production)</text>
+
+  <rect x="320" y="265" width="240" height="40" class="node-box" />
+  <text x="440" y="285" class="node-label">v1 Orchestrator (single-shot)</text>
+
+  <rect x="580" y="265" width="240" height="40" class="node-box" />
+  <text x="700" y="285" class="node-label">v2 Orchestrator (agent dispatcher)</text>
+
+  <rect x="320" y="315" width="520" height="35" class="node-box" />
+  <text x="580" y="335" class="node-label">14 Specialized Agents + 27+ Modules</text>
+
+  <rect x="320" y="358" width="520" height="30" class="node-box" />
+  <text x="580" y="375" class="node-sublabel">ScreenReader | SmartTTS | SQLite Memory | ChromaDB (legacy) | Browser | YouTube | Spotify | ...</text>
+
+  <rect x="320" y="395" width="520" height="28" class="node-box" />
+  <text x="580" y="410" class="node-sublabel">core/llm.py | agents/ (base, planner, executor, researcher, reflector, registry) | tools/ (8 tools)</text>
+
+  <line x1="580" y1="430" x2="580" y2="1100" class="edge" stroke-dasharray="4 4" />
+  <polygon points="580,1105 575,1095 585,1095" class="edge-arrow" />
+
+  <!-- ================================================================== -->
+  <!-- ===== RIGHT COLUMN: NEW ENGINE (Phases 1-5) ===== -->
+  <!-- ================================================================== -->
+
+  <rect x="750" y="235" width="620" height="855" class="node-box-highlight" rx="12" ry="12" />
+  <text x="1060" y="258" class="section-title" fill="#60a5fa">New Engine (Phases 1–5)</text>
+
+  <!-- ===== PHASE 1: Infrastructure ===== -->
+  <rect x="770" y="275" width="580" height="145" class="phase1" />
+  <rect x="770" y="275" width="80" height="20" class="badge" fill="#3b82f6" />
+  <text x="810" y="286" class="badge-text">P1: INFRA</text>
+  <text x="1060" y="286" class="section-title" fill="#60a5fa" font-size="11">Infrastructure Layer</text>
+
+  <rect x="780" y="300" width="175" height="50" class="node-box" />
+  <text x="867" y="318" class="node-label">Unified LLM Client</text>
+  <text x="867" y="333" class="node-sublabel">OllamaProvider + OpenRouterProvider</text>
+  <text x="867" y="345" class="node-sublabel" font-size="8">endpoint validation | auto-detect | auto-pull</text>
+
+  <rect x="965" y="300" width="175" height="50" class="node-box" />
+  <text x="1052" y="318" class="node-label">Model Router</text>
+  <text x="1052" y="333" class="node-sublabel">Dynamic model selection</text>
+  <text x="1052" y="345" class="node-sublabel" font-size="8">task classifier | scoring | top-5</text>
+
+  <rect x="1150" y="300" width="175" height="50" class="node-box" />
+  <text x="1237" y="318" class="node-label">Hardware Monitor</text>
+  <text x="1237" y="333" class="node-sublabel">nvidia-smi + psutil</text>
+  <text x="1237" y="345" class="node-sublabel" font-size="8">5s poll | is_overloaded()</text>
+
+  <rect x="780" y="360" width="175" height="50" class="node-box" />
+  <text x="867" y="378" class="node-label">Episodic Memory</text>
+  <text x="867" y="393" class="node-sublabel">ChromaDB + SQLite</text>
+  <text x="867" y="405" class="node-sublabel" font-size="8">RAG search | compact | failures</text>
+
+  <rect x="965" y="360" width="175" height="50" class="node-box" />
+  <text x="1052" y="378" class="node-label">Log Bootstrap</text>
+  <text x="1052" y="393" class="node-sublabel">Parses logs/*.md</text>
+  <text x="1052" y="405" class="node-sublabel" font-size="8">Seeds episodic memory</text>
+
+  <rect x="1150" y="360" width="175" height="50" class="node-box" />
+  <text x="1237" y="378" class="node-label">State Machine (MVP)</text>
+  <text x="1237" y="393" class="node-sublabel">12-state pipeline</text>
+  <text x="1237" y="405" class="node-sublabel" font-size="8">superseded by P2</text>
+
+  <!-- Arrow down -->
+  <line x1="1060" y1="420" x2="1060" y2="445" class="edge-new" />
+  <polygon points="1060,450 1055,440 1065,440" class="edge-arrow-new" />
+
+  <!-- ===== PHASE 2: LangGraph + Agents ===== -->
+  <rect x="770" y="455" width="580" height="195" class="phase2" />
+  <rect x="770" y="455" width="80" height="20" class="badge" fill="#a78bfa" />
+  <text x="810" y="466" class="badge-text">P2: ORCH</text>
+  <text x="1060" y="466" class="section-title" fill="#a78bfa" font-size="11">Orchestration Layer — LangGraph + CrewAI + AutoGen</text>
+
+  <!-- LangGraph State Machine -->
+  <rect x="780" y="480" width="540" height="35" class="node-box-highlight" />
+  <text x="1050" y="498" class="node-label" fill="#a78bfa">LangGraph State Machine (13 states)</text>
+  <text x="1050" y="512" class="node-sublabel">INPUT → RAG_RECALL → MODEL_SELECT → TASK_DECOMPOSE → AGENT_ALLOCATE → EXECUTE → CRITIC_VALIDATE → STORE_EPISODE → RESPOND → END | RETRY | ESCALATE | FAIL</text>
+
+  <!-- CrewAI Agents -->
+  <rect x="780" y="525" width="540" height="60" class="node-box" />
+  <text x="1050" y="542" class="node-label">6 CrewAI-Style Agents (AgentRegistry)</text>
+  <text x="1050" y="557" class="node-sublabel" font-size="9">
+    PlannerAgent  |  ExecutorAgent  |  CriticAgent  |  SearcherAgent  |  MemoryAgent  |  FileOperatorAgent
+  </text>
+  <text x="1050" y="572" class="node-sublabel" font-size="8">(LLM calls routed through our LLMClient, not CrewAI internals)</text>
+
+  <!-- AutoGen Debate -->
+  <rect x="780" y="595" width="540" height="45" class="node-box-highlight" />
+  <text x="1050" y="612" class="node-label" fill="#a78bfa">AutoGen Multi-Agent Debate</text>
+  <text x="1050" y="628" class="node-sublabel">3 rounds | Planner→executor→critic consensus | fallback for complex tasks</text>
+
+  <!-- Arrow down -->
+  <line x1="1060" y1="650" x2="1060" y2="675" class="edge-new" />
+  <polygon points="1060,680 1055,670 1065,670" class="edge-arrow-new" />
+
+  <!-- ===== PHASE 3: Reasoning + Routing ===== -->
+  <rect x="770" y="685" width="580" height="130" class="phase3" />
+  <rect x="770" y="685" width="80" height="20" class="badge" fill="#34d399" />
+  <text x="810" y="696" class="badge-text">P3: HEAL</text>
+  <text x="1060" y="696" class="section-title" fill="#34d399" font-size="11">Reasoning + Self-Healing + Routing</text>
+
+  <rect x="780" y="710" width="355" height="50" class="node-box" />
+  <text x="957" y="728" class="node-label">Reasoning Pipeline (8-step)</text>
+  <text x="957" y="743" class="node-sublabel">RAG recall → task analysis → model select → plan → execute → validate → store → score</text>
+  <text x="957" y="755" class="node-sublabel" font-size="8">CriticValidator: validate_output() | self_heal() with failure pattern context</text>
+
+  <rect x="1145" y="710" width="185" height="50" class="node-box" />
+  <text x="1237" y="728" class="node-label">Routing Engine</text>
+  <text x="1237" y="743" class="node-sublabel">Per-agent/model scoring</text>
+  <text x="1237" y="755" class="node-sublabel" font-size="8">get_best_agent() | rankings</text>
+
+  <rect x="780" y="770" width="550" height="35" class="node-box-highlight" />
+  <text x="1055" y="788" class="node-label" fill="#34d399">Scoring Feedback Loop (closed)</text>
+  <text x="1055" y="801" class="node-sublabel">Every task success/failure → RoutingEngine scores → better agent/model selection next time</text>
+
+  <!-- Arrow down -->
+  <line x1="1060" y1="815" x2="1060" y2="840" class="edge-new" />
+  <polygon points="1060,845 1055,835 1065,835" class="edge-arrow-new" />
+
+  <!-- ===== PHASE 4: Commands + Privilege ===== -->
+  <rect x="770" y="850" width="580" height="100" class="phase4" />
+  <rect x="770" y="850" width="80" height="20" class="badge" fill="#f87171" />
+  <text x="810" y="861" class="badge-text">P4: CMD</text>
+  <text x="1060" y="861" class="section-title" fill="#f87171" font-size="11">Command Interface + Privilege Escalation</text>
+
+  <rect x="780" y="875" width="270" height="60" class="node-box" />
+  <text x="915" y="893" class="node-label">Command System</text>
+  <text x="915" y="908" class="node-sublabel">parse_command() + CommandHandler</text>
+  <text x="915" y="921" class="node-sublabel" font-size="8">/help /plan /run /memory /scores /exec /pull /status /describe</text>
+
+  <rect x="1060" y="875" width="270" height="60" class="node-box" />
+  <text x="1195" y="893" class="node-label">Privileged Shell</text>
+  <text x="1195" y="908" class="node-sublabel">sudo-aware | destructive detection</text>
+  <text x="1195" y="921" class="node-sublabel" font-size="8">--confirm required | .bak backups | undo_log | audit_log</text>
+
+  <!-- Arrow down -->
+  <line x1="1060" y1="950" x2="1060" y2="975" class="edge-new" />
+  <polygon points="1060,980 1055,970 1065,970" class="edge-arrow-new" />
+
+  <!-- ===== PHASE 5: Continuous Learning ===== -->
+  <rect x="770" y="985" width="580" height="95" class="phase5" />
+  <rect x="770" y="985" width="80" height="20" class="badge" fill="#fbbf24" />
+  <text x="810" y="996" class="badge-text">P5: LEARN</text>
+  <text x="1060" y="996" class="section-title" fill="#fbbf24" font-size="11">Continuous Learning Layer</text>
+
+  <rect x="780" y="1010" width="270" height="55" class="node-box" />
+  <text x="915" y="1028" class="node-label">Strategy Refiner</text>
+  <text x="915" y="1043" class="node-sublabel">24h background cycle</text>
+  <text x="915" y="1056" class="node-sublabel" font-size="8">refresh models | analyze failures | compact memory</text>
+
+  <rect x="1060" y="1010" width="270" height="55" class="node-box" />
+  <text x="1195" y="1028" class="node-label">Tool Generation</text>
+  <text x="1195" y="1043" class="node-sublabel">LLM generates tool stubs</text>
+  <text x="1195" y="1056" class="node-sublabel" font-size="8">writes to tools/ | registers in registry_v2</text>
+
+  <!-- ================================================================== -->
+  <!-- ===== BOTTOM: OLLAMA ===== -->
+  <!-- ================================================================== -->
+
+  <rect x="780" y="1100" width="240" height="50" class="node-box" />
+  <text x="900" y="1118" class="node-label">Ollama (localhost:11434)</text>
+  <text x="900" y="1133" class="node-sublabel">LLM inference — whatever ollama list returns</text>
+
+  <rect x="1040" y="1100" width="240" height="50" class="node-box" />
+  <text x="1160" y="1118" class="node-label">OpenRouter (optional)</text>
+  <text x="1160" y="1133" class="node-sublabel">Cloud LLM fallback provider</text>
+
+  <!-- Connector lines to bottom -->
+  <line x1="900" y1="1100" x2="900" y2="1080" class="edge-new" stroke-dasharray="4 4" />
+  <line x1="580" y1="1105" x2="900" y2="1100" class="edge" stroke-dasharray="4 4" />
+
+  <!-- ================================================================== -->
+  <!-- ===== DATA FLOW ARROWS between P1-P5 ===== -->
+  <!-- ================================================================== -->
+
+  <!-- Vertical flow through phases -->
+  <line x1="1130" y1="370" x2="1130" y2="480" class="edge-new" stroke-dasharray="3 3" />
+  <text x="1135" y="425" class="edge-label" fill="#3b82f6" font-size="8">P1→P2</text>
+
+  <line x1="1130" y1="630" x2="1130" y2="710" class="edge-new" stroke-dasharray="3 3" />
+  <text x="1135" y="670" class="edge-label" fill="#3b82f6" font-size="8">P2→P3</text>
+
+  <line x1="1130" y1="780" x2="1130" y2="875" class="edge-new" stroke-dasharray="3 3" />
+  <text x="1135" y="825" class="edge-label" fill="#3b82f6" font-size="8">P3→P4</text>
+
+  <line x1="1130" y1="935" x2="1130" y2="1010" class="edge-new" stroke-dasharray="3 3" />
+  <text x="1135" y="970" class="edge-label" fill="#3b82f6" font-size="8">P4→P5</text>
+
+  <!-- ================================================================== -->
+  <!-- ===== LEGEND ===== -->
+  <!-- ================================================================== -->
+
+  <rect x="20" y="1100" width="550" height="90" class="node-box" rx="6" />
+  <text x="295" y="1120" class="section-title" font-size="12">Legend — Phase Colors</text>
+
+  <rect x="40" y="1135" width="16" height="16" class="phase1" />
+  <text x="65" y="1148" class="legend-item">Phase 1 — Infrastructure</text>
+
+  <rect x="40" y="1158" width="16" height="16" class="phase2" />
+  <text x="65" y="1171" class="legend-item">Phase 2 — LangGraph + Agents</text>
+
+  <rect x="220" y="1135" width="16" height="16" class="phase3" />
+  <text x="245" y="1148" class="legend-item">Phase 3 — Self-Healing + Routing</text>
+
+  <rect x="220" y="1158" width="16" height="16" class="phase4" />
+  <text x="245" y="1171" class="legend-item">Phase 4 — Commands + Privilege</text>
+
+  <rect x="420" y="1135" width="16" height="16" class="phase5" />
+  <text x="445" y="1148" class="legend-item">Phase 5 — Continuous Learning</text>
+
+</svg>
+</div>
+
+<!-- ================================================================== -->
+<!-- ===== DETAILED PIPELINE DIAGRAM ===== -->
+<!-- ================================================================== -->
+
+<h2 style="margin-top:50px; color:#60a5fa; text-align:center;">Full Pipeline Flow (Phases 1–5 Combined)</h2>
+
+<div class="diagram-container" style="margin-top:20px;">
+<svg viewBox="0 0 1400 800" xmlns="http://www.w3.org/2000/svg">
+
+  <text x="700" y="30" class="section-title" fill="#60a5fa" font-size="16">POST /api/v2/chat — End-to-End Request Lifecycle</text>
+
+  <!-- Step row -->
+  <rect x="30" y="60" width="130" height="40" class="phase1" rx="20" />
+  <text x="95" y="83" class="node-label" fill="#60a5fa">1. User Input</text>
+
+  <line x1="160" y1="80" x2="200" y2="80" class="edge-new" />
+  <polygon points="205,80 195,75 195,85" class="edge-arrow-new" />
+
+  <rect x="210" y="60" width="150" height="40" class="phase1" rx="6" />
+  <text x="285" y="83" class="node-label">RAG Recall</text>
+
+  <line x1="360" y1="80" x2="400" y2="80" class="edge-new" />
+  <polygon points="405,80 395,75 395,85" class="edge-arrow-new" />
+
+  <rect x="410" y="60" width="150" height="40" class="phase1" rx="6" />
+  <text x="485" y="83" class="node-label">Model Select</text>
+
+  <line x1="560" y1="80" x2="600" y2="80" class="edge-new" />
+  <polygon points="605,80 595,75 595,85" class="edge-arrow-new" />
+
+  <rect x="610" y="60" width="150" height="40" class="phase2" rx="6" />
+  <text x="685" y="83" class="node-label" fill="#a78bfa">Task Decompose</text>
+
+  <line x1="760" y1="80" x2="800" y2="80" class="edge-new" />
+  <polygon points="805,80 795,75 795,85" class="edge-arrow-new" />
+
+  <rect x="810" y="60" width="150" height="40" class="phase2" rx="6" />
+  <text x="885" y="83" class="node-label" fill="#a78bfa">Execute</text>
+
+  <line x1="960" y1="80" x2="1000" y2="80" class="edge-new" />
+  <polygon points="1005,80 995,75 995,85" class="edge-arrow-new" />
+
+  <rect x="1010" y="60" width="150" height="40" class="phase3" rx="6" />
+  <text x="1085" y="83" class="node-label" fill="#34d399">Validate</text>
+
+  <line x1="1160" y1="80" x2="1200" y2="80" class="edge-new" />
+  <polygon points="1205,80 1195,75 1195,85" class="edge-arrow-new" />
+
+  <rect x="1210" y="60" width="160" height="40" class="phase5" rx="20" />
+  <text x="1290" y="83" class="node-label" fill="#fbbf24">6. Respond</text>
+
+  <!-- Sub-step descriptions -->
+  <text x="95" y="130" class="node-sublabel" fill="#475569">"what's the weather</text>
+  <text x="95" y="143" class="node-sublabel" fill="#475569">in Tokyo?"</text>
+
+  <text x="285" y="130" class="node-sublabel" fill="#475569">Search episodic</text>
+  <text x="285" y="143" class="node-sublabel" fill="#475569">memory for similar</text>
+  <text x="285" y="156" class="node-sublabel" fill="#475569">past tasks</text>
+
+  <text x="485" y="130" class="node-sublabel" fill="#475569">ollama list →</text>
+  <text x="485" y="143" class="node-sublabel" fill="#475569">score models →</text>
+  <text x="485" y="156" class="node-sublabel" fill="#475569">pick best</text>
+
+  <text x="685" y="130" class="node-sublabel" fill="#475569">PlannerAgent:</text>
+  <text x="685" y="143" class="node-sublabel" fill="#475569">step-by-step plan</text>
+  <text x="685" y="156" class="node-sublabel" fill="#475569">[{action, params}]</text>
+
+  <text x="885" y="130" class="node-sublabel" fill="#475569">ExecutorAgent:</text>
+  <text x="885" y="143" class="node-sublabel" fill="#475569">calls tools,</text>
+  <text x="885" y="156" class="node-sublabel" fill="#475569">records results</text>
+
+  <text x="1085" y="130" class="node-sublabel" fill="#475569">CriticAgent:</text>
+  <text x="1085" y="143" class="node-sublabel" fill="#475569">score + heal</text>
+  <text x="1085" y="156" class="node-sublabel" fill="#475569">if errors</text>
+
+  <!-- ===== CONDITIONAL BRANCHING ===== -->
+  <text x="700" y="200" class="section-title" fill="#a78bfa" font-size="13">Conditional Branches During Execution</text>
+
+  <!-- RETRY -->
+  <rect x="60" y="220" width="200" height="45" class="phase2" rx="22" />
+  <text x="160" y="243" class="node-label" fill="#a78bfa">RETRY (max 3×)</text>
+  <text x="160" y="258" class="node-sublabel">If validation score &lt; 0.6</text>
+
+  <!-- ESCALATE -->
+  <rect x="500" y="220" width="200" height="45" class="phase4" rx="22" />
+  <text x="600" y="243" class="node-label" fill="#f87171">ESCALATE</text>
+  <text x="600" y="258" class="node-sublabel">If retries exhausted</text>
+
+  <!-- FAIL -->
+  <rect x="940" y="220" width="200" height="45" class="phase4" rx="22" />
+  <text x="1040" y="243" class="node-label" fill="#f87171">FAIL → Audit</text>
+  <text x="1040" y="258" class="node-sublabel">Log to episodic memory</text>
+
+  <line x1="160" y1="265" x2="160" y2="300" class="edge-new" />
+  <polygon points="160,305 155,295 165,295" class="edge-arrow-new" />
+  <line x1="600" y1="265" x2="600" y2="300" class="edge-new" />
+  <polygon points="600,305 595,295 605,295" class="edge-arrow-new" />
+  <line x1="1040" y1="265" x2="1040" y2="300" class="edge-new" />
+  <polygon points="1040,305 1035,295 1045,295" class="edge-arrow-new" />
+
+  <!-- ===== EPISODE STORE ===== -->
+  <rect x="400" y="310" width="600" height="45" class="phase1" rx="6" />
+  <text x="700" y="330" class="node-label" fill="#60a5fa">7. Store Episode (always runs)</text>
+  <text x="700" y="347" class="node-sublabel">EpisodicMemory.store(input, reasoning, tools, output, errors, score, model_used, agent_used)</text>
+
+  <line x1="700" y1="355" x2="700" y2="390" class="edge-new" />
+  <polygon points="700,395 695,385 705,385" class="edge-arrow-new" />
+
+  <!-- ===== ROUTING FEEDBACK ===== -->
+  <rect x="400" y="400" width="600" height="45" class="phase3" rx="6" />
+  <text x="700" y="420" class="node-label" fill="#34d399">8. Routing Feedback (always runs)</text>
+  <text x="700" y="437" class="node-sublabel">RoutingEngine.record_agent_result() + record_model_result() → updates success/failure rates</text>
+
+  <!-- ===== TOOL GRID ===== -->
+  <rect x="100" y="480" width="1200" height="130" class="node-box" rx="8" />
+  <text x="700" y="505" class="section-title">All Available Tools</text>
+
+  <rect x="130" y="520" width="130" height="50" class="node-box" />
+  <text x="195" y="540" class="node-label">math_tool</text>
+  <text x="195" y="555" class="node-sublabel">eval expressions</text>
+
+  <rect x="280" y="520" width="130" height="50" class="node-box" />
+  <text x="345" y="540" class="node-label">time_tool</text>
+  <text x="345" y="555" class="node-sublabel">current date/time</text>
+
+  <rect x="430" y="520" width="130" height="50" class="node-box" />
+  <text x="495" y="540" class="node-label">weather_tool</text>
+  <text x="495" y="555" class="node-sublabel">OpenWeather API</text>
+
+  <rect x="580" y="520" width="130" height="50" class="node-box" />
+  <text x="645" y="540" class="node-label">web_search</text>
+  <text x="645" y="555" class="node-sublabel">DuckDuckGo</text>
+
+  <rect x="730" y="520" width="130" height="50" class="node-box" />
+  <text x="795" y="540" class="node-label">file_tool</text>
+  <text x="795" y="555" class="node-sublabel">read/write/list</text>
+
+  <rect x="880" y="520" width="130" height="50" class="node-box" />
+  <text x="945" y="540" class="node-label">system_tool</text>
+  <text x="945" y="555" class="node-sublabel">OS info</text>
+
+  <rect x="1030" y="520" width="130" height="50" class="node-box" />
+  <text x="1095" y="540" class="node-label">browser_tool</text>
+  <text x="1095" y="555" class="node-sublabel">URL fetch</text>
+
+  <rect x="190" y="580" width="250" height="25" class="node-box" />
+  <text x="315" y="595" class="node-sublabel">media_tool (playerctl)</text>
+
+  <rect x="460" y="580" width="250" height="25" class="phase4" />
+  <text x="585" y="595" class="node-sublabel" fill="#f87171">privileged_shell (sudo + audit + undo)</text>
+
+  <rect x="730" y="580" width="250" height="25" class="node-box" />
+  <text x="855" y="595" class="node-sublabel">registry_v2 (extended tool registry)</text>
+
+  <!-- ===== CORE SYSTEMS ===== -->
+  <rect x="100" y="640" width="1200" height="145" class="node-box" rx="10" />
+  <text x="700" y="665" class="section-title">Core Infrastructure (Always Active)</text>
+
+  <rect x="130" y="680" width="260" height="45" class="phase1" />
+  <text x="260" y="698" class="node-label" fill="#60a5fa">LLM Client</text>
+  <text x="260" y="715" class="node-sublabel">OllamaProvider | OpenRouterProvider | auto-pull</text>
+
+  <rect x="410" y="680" width="260" height="45" class="phase1" />
+  <text x="540" y="698" class="node-label" fill="#60a5fa">Hardware Monitor</text>
+  <text x="540" y="715" class="node-sublabel">nvidia-smi | psutil | 5s poll | throttling</text>
+
+  <rect x="690" y="680" width="260" height="45" class="phase1" />
+  <text x="820" y="698" class="node-label" fill="#60a5fa">Episodic Memory</text>
+  <text x="820" y="715" class="node-sublabel">ChromaDB | SQLite | RAG | compaction</text>
+
+  <rect x="970" y="680" width="260" height="45" class="phase3" />
+  <text x="1100" y="698" class="node-label" fill="#34d399">Routing Engine</text>
+  <text x="1100" y="715" class="node-sublabel">SQLite scoring | agent/model rankings</text>
+
+  <rect x="130" y="735" width="350" height="40" class="phase5" />
+  <text x="305" y="755" class="node-label" fill="#fbbf24">Strategy Refiner (24h background cycle)</text>
+
+  <rect x="500" y="735" width="350" height="40" class="phase4" />
+  <text x="675" y="755" class="node-label" fill="#f87171">Command Interface + System Descriptor</text>
+
+  <rect x="870" y="735" width="350" height="40" class="node-box" />
+  <text x="1045" y="755" class="node-label">Config Singleton (config.yaml → Python)</text>
+
+</svg>
+</div>
+
+</body>
+</html>

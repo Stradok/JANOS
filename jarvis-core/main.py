@@ -170,6 +170,7 @@ async def lifespan(app: FastAPI):
                 routing_engine=app.state.routing_engine,
                 llm=llm,
             )
+            await app.state.strategy_refiner.start()
 
             print(f"[JAN] Phase 2-5 initialized: {len(agents)} agents, command interface, privilege system, strategy refiner")
         except ImportError as e:
