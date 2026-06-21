@@ -460,7 +460,7 @@
   <text x="1100" y="715" class="node-sublabel">SQLite scoring | agent/model rankings</text>
 
   <rect x="130" y="735" width="350" height="40" class="phase5" />
-  <text x="305" y="755" class="node-label" fill="#fbbf24">Strategy Refiner (24h background cycle)</text>
+  <text x="305" y="755" class="node-label" fill="#fbbf24">Strategy Refiner (startup + 24h cycle)</text>
 
   <rect x="500" y="735" width="350" height="40" class="phase4" />
   <text x="675" y="755" class="node-label" fill="#f87171">Command Interface + System Descriptor</text>
@@ -469,6 +469,111 @@
   <text x="1045" y="755" class="node-label">Config Singleton (config.yaml → Python)</text>
 
 </svg>
+</div>
+
+<!-- ===== MAKEFILE WORKFLOW SECTION ===== -->
+<style>
+  .workflow { max-width: 1500px; margin: 32px auto 0; }
+  .workflow h2 { font-size: 1.4em; color: #60a5fa; margin-bottom: 20px; border-bottom: 1px solid #334155; padding-bottom: 10px; }
+  .wf-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; }
+  .wf-card { background: #1e293b; border-radius: 12px; padding: 18px; border: 1px solid #334155; }
+  .wf-card h3 { font-size: 0.85em; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 12px; }
+  .wf-card h3.setup   { color: #60a5fa; }
+  .wf-card h3.server  { color: #a78bfa; }
+  .wf-card h3.chat    { color: #34d399; }
+  .wf-card h3.health  { color: #fbbf24; }
+  .wf-card h3.test    { color: #fb923c; }
+  .wf-card h3.lint    { color: #f472b6; }
+  .wf-card h3.db      { color: #94a3b8; }
+  .wf-card h3.ollama  { color: #60a5fa; }
+  .wf-card h3.learn   { color: #fbbf24; }
+  .wf-card h3.clean   { color: #f87171; }
+  .cmd-row { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; font-size: 0.82em; }
+  .cmd { font-family: 'Consolas', 'Courier New', monospace; color: #e2e8f0; background: #0f172a; padding: 2px 7px; border-radius: 4px; white-space: nowrap; }
+  .cmd-desc { color: #64748b; margin-left: 12px; font-size: 0.95em; text-align: right; }
+  .wf-note { margin-top: 20px; color: #64748b; font-size: 0.82em; text-align: center; }
+  .wf-note code { color: #94a3b8; background: #1e293b; padding: 1px 5px; border-radius: 3px; }
+</style>
+
+<div class="workflow">
+  <h2>Development Workflow — <code style="color:#94a3b8;font-size:0.75em">make help</code> for full reference</h2>
+  <div class="wf-grid">
+
+    <div class="wf-card">
+      <h3 class="setup">Setup</h3>
+      <div class="cmd-row"><span class="cmd">make setup</span><span class="cmd-desc">Full first-time setup</span></div>
+      <div class="cmd-row"><span class="cmd">make install</span><span class="cmd-desc">Install dependencies</span></div>
+      <div class="cmd-row"><span class="cmd">make install-dev</span><span class="cmd-desc">Add ruff, black, pytest</span></div>
+      <div class="cmd-row"><span class="cmd">make install-optional</span><span class="cmd-desc">Wake word, face, playwright</span></div>
+    </div>
+
+    <div class="wf-card">
+      <h3 class="server">Server</h3>
+      <div class="cmd-row"><span class="cmd">make dev</span><span class="cmd-desc">Dev server, auto-reload :8000</span></div>
+      <div class="cmd-row"><span class="cmd">make prod</span><span class="cmd-desc">Production, 2 workers</span></div>
+      <div class="cmd-row"><span class="cmd">make open</span><span class="cmd-desc">Open browser UI</span></div>
+    </div>
+
+    <div class="wf-card">
+      <h3 class="chat">Chat / CLI</h3>
+      <div class="cmd-row"><span class="cmd">make chat</span><span class="cmd-desc">Phase 2-5 full pipeline CLI</span></div>
+      <div class="cmd-row"><span class="cmd">make chat-v1</span><span class="cmd-desc">Legacy v1 orchestrator CLI</span></div>
+      <div class="cmd-row"><span class="cmd">make demo</span><span class="cmd-desc">Standalone demo (no server)</span></div>
+    </div>
+
+    <div class="wf-card">
+      <h3 class="health">Health Checks</h3>
+      <div class="cmd-row"><span class="cmd">make health</span><span class="cmd-desc">GET /health — phases + agents</span></div>
+      <div class="cmd-row"><span class="cmd">make status</span><span class="cmd-desc">GET /api/status — hw + mem</span></div>
+      <div class="cmd-row"><span class="cmd">make rankings</span><span class="cmd-desc">GET /api/v3/rankings</span></div>
+      <div class="cmd-row"><span class="cmd">make scores</span><span class="cmd-desc">GET /api/v5/scores</span></div>
+      <div class="cmd-row"><span class="cmd">make audit</span><span class="cmd-desc">All four above in sequence</span></div>
+    </div>
+
+    <div class="wf-card">
+      <h3 class="test">Testing</h3>
+      <div class="cmd-row"><span class="cmd">make test</span><span class="cmd-desc">All tests</span></div>
+      <div class="cmd-row"><span class="cmd">make test-imports</span><span class="cmd-desc">17 module import checks</span></div>
+      <div class="cmd-row"><span class="cmd">make test-pipeline</span><span class="cmd-desc">13 Phase 3-5 integration checks</span></div>
+    </div>
+
+    <div class="wf-card">
+      <h3 class="lint">Lint / Format</h3>
+      <div class="cmd-row"><span class="cmd">make lint</span><span class="cmd-desc">ruff check</span></div>
+      <div class="cmd-row"><span class="cmd">make format</span><span class="cmd-desc">black in-place</span></div>
+      <div class="cmd-row"><span class="cmd">make check</span><span class="cmd-desc">lint + format-check (CI gate)</span></div>
+    </div>
+
+    <div class="wf-card">
+      <h3 class="db">Database</h3>
+      <div class="cmd-row"><span class="cmd">make db-init</span><span class="cmd-desc">Create tables (idempotent)</span></div>
+      <div class="cmd-row"><span class="cmd">make db-reset</span><span class="cmd-desc">Drop + recreate (with confirm)</span></div>
+    </div>
+
+    <div class="wf-card">
+      <h3 class="ollama">Ollama</h3>
+      <div class="cmd-row"><span class="cmd">make ollama-check</span><span class="cmd-desc">Status + installed models</span></div>
+      <div class="cmd-row"><span class="cmd">make ollama-list</span><span class="cmd-desc">ollama list</span></div>
+      <div class="cmd-row"><span class="cmd">make ollama-pull MODEL=…</span><span class="cmd-desc">Pull a model</span></div>
+    </div>
+
+    <div class="wf-card">
+      <h3 class="learn">Phase 5 — Learning</h3>
+      <div class="cmd-row"><span class="cmd">make refine</span><span class="cmd-desc">Strategy refinement cycle</span></div>
+      <div class="cmd-row"><span class="cmd">make generate-tool CAP=…</span><span class="cmd-desc">Generate tool stub</span></div>
+      <div class="cmd-row"><span class="cmd">make pull-model MODEL=…</span><span class="cmd-desc">Pull via JANOS API</span></div>
+    </div>
+
+    <div class="wf-card">
+      <h3 class="clean">Cleanup</h3>
+      <div class="cmd-row"><span class="cmd">make clean</span><span class="cmd-desc">Remove __pycache__ + .pyc</span></div>
+      <div class="cmd-row"><span class="cmd">make clean-logs</span><span class="cmd-desc">Clear daemon log</span></div>
+      <div class="cmd-row"><span class="cmd">make clean-memory</span><span class="cmd-desc">Reset SQLite DBs</span></div>
+      <div class="cmd-row"><span class="cmd">make clean-all</span><span class="cmd-desc">Cache + logs (keeps DBs)</span></div>
+    </div>
+
+  </div>
+  <p class="wf-note">All targets guard for missing <code>venv/</code> — run <code>make setup</code> first. Override port with <code>make dev PORT=9000</code>.</p>
 </div>
 
 </body>

@@ -460,7 +460,70 @@ core/config.py (singleton)
 
 ---
 
-## 9. Key Architectural Decisions
+## 9. Development Workflow (Makefile)
+
+`Makefile` is the primary entry point for all project operations.
+
+```bash
+# First-time setup
+make setup              # runs setup.sh: venv + deps + dirs
+make install            # pip install -r requirements.txt (venv already exists)
+make install-dev        # adds ruff, black, pytest, httpx
+
+# Daily workflow
+make dev                # uvicorn main:app --reload  → http://localhost:8000
+make chat               # python chat.py --full  (Phase 2-5 pipeline CLI)
+make demo               # python demo.py  (standalone, no server needed)
+make open               # xdg-open http://localhost:8000
+
+# Health checks (server must be running)
+make health             # GET /health
+make status             # GET /api/status
+make rankings           # GET /api/v3/rankings
+make scores             # GET /api/v5/scores
+make audit              # runs all four above
+
+# Testing
+make test               # test-imports + test-pipeline
+make test-imports       # verify all 17 module imports
+make test-pipeline      # 13 Phase 3-5 integration checks (no server needed)
+
+# Code quality
+make lint               # ruff check
+make format             # black in-place
+make check              # lint + format-check (CI gate)
+
+# Database
+make db-init            # create routing.db + scoring.db tables (idempotent)
+make db-reset           # drop + recreate all DBs (with confirmation prompt)
+
+# Ollama
+make ollama-check       # curl /api/tags + show installed models
+make ollama-pull MODEL=llama3.1:8b
+
+# Phase 5 learning (server must be running)
+make refine             # POST /api/v5/refine
+make generate-tool CAP="description"
+
+# Cleanup
+make clean              # remove __pycache__ + .pyc
+make clean-logs         # clear daemon.log
+make clean-all          # cache + logs (keeps databases)
+```
+
+All targets self-document via `make help`.
+
+### Script files (`scripts/`)
+
+| File | Purpose |
+|------|---------|
+| `scripts/test_imports.py` | `make test-imports` — verifies 17 core/agent/tool imports |
+| `scripts/test_pipeline.py` | `make test-pipeline` — 13 Phase 3-5 integration checks |
+| `scripts/db_init.py` | `make db-init` — creates SQLite tables idempotently |
+
+---
+
+## 10. Key Architectural Decisions
 
 | Decision | Rationale |
 |----------|-----------|
