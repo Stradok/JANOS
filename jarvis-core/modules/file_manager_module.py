@@ -1,5 +1,7 @@
 # modules/file_manager_module.py
 import os
+import sys
+import subprocess
 import shutil
 import glob as glob_module
 from pathlib import Path
@@ -135,6 +137,41 @@ class FileManagerModule(ModuleBase):
         except Exception as e:
             return {"error": str(e)}
 
+    def _run(self, command, timeout=30):
+        """Execute a shell command."""
+        try:
+            result = subprocess.run(
+                command, shell=True, capture_output=True, text=True, timeout=timeout
+            )
+            return {
+                "status": "ok",
+                "returncode": result.returncode,
+                "stdout": result.stdout[-1000:],
+                "stderr": result.stderr[-500:],
+            }
+        except subprocess.TimeoutExpired:
+            return {"error": f"Command timed out ({timeout}s)"}
+        except Exception as e:
+            return {"error": f"Run error: {e}"}
+
+    def _run_python(self, code, timeout=30):
+        """Execute a Python code snippet inline."""
+        try:
+            result = subprocess.run(
+                [sys.executable, "-c", code],
+                capture_output=True, text=True, timeout=timeout
+            )
+            return {
+                "status": "ok",
+                "returncode": result.returncode,
+                "stdout": result.stdout[-1000:],
+                "stderr": result.stderr[-500:],
+            }
+        except subprocess.TimeoutExpired:
+            return {"error": f"Python execution timed out ({timeout}s)"}
+        except Exception as e:
+            return {"error": f"Python exec error: {e}"}
+
     def process(self, input_data):
         action = input_data.get("action", "list")
         path = input_data.get("path", ".")
@@ -161,5 +198,15 @@ class FileManagerModule(ModuleBase):
             return self._search(path, pattern, input_data.get("max_results", 20))
         elif action == "info":
             return self._info(path)
+        elif action == "run":
+            return self._run(
+                input_data.get("command", ""),
+                timeout=input_data.get("timeout", 30)
+            )
+        elif action == "run_python":
+            return self._run_python(
+                input_data.get("code", ""),
+                timeout=input_data.get("timeout", 30)
+            )
         else:
-            return {"error": f"Unknown action: {action}. Use: list, read, create_file, create_dir, move, copy, delete, search, info"}
+            return {"error": f"Unknown action: {action}. Use: list, read, create_file, create_dir, move, copy, delete, search, info, run, run_python"}

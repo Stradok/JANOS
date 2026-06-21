@@ -309,7 +309,7 @@ class DaemonModule(ModuleBase):
         try:
             cpu_percent = psutil.cpu_percent(interval=1)
             mem = psutil.virtual_memory()
-            disk = psutil.disk_usage("/") if os.name != "nt" else psutil.disk_usage("C:\\")
+            disk = psutil.disk_usage("/")
 
             ram_available_gb = mem.available / (1024 ** 3)
             disk_free_gb = disk.free / (1024 ** 3)

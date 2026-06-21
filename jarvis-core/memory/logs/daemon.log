@@ -56,3 +56,133 @@
 2026-04-20 04:22:38,133 [INFO] [Daemon] System health — CPU: 20.7%, RAM: 86.7% used (2.1 GB free), Disk: 96.0% used (9.5 GB free)
 2026-04-20 04:22:38,133 [WARNING] [Daemon] DISK ALMOST FULL: 96.0% used
 2026-04-20 04:22:38,133 [INFO] [Daemon] ♥ Heartbeat — uptime: 0h 5m 7s, modules wired: 6/6, low_power: False, camera_watch: False, process RSS: 258.6 MB
+2026-06-16 02:21:13,964 [INFO] [Daemon] JAN background daemon loop running
+2026-06-16 02:21:13,964 [INFO] [Daemon] JAN background daemon started
+2026-06-16 02:21:14,965 [INFO] [Daemon] System health — CPU: 10.5%, RAM: 56.7% used (6.5 GB free), Disk: 35.6% used (142.2 GB free)
+2026-06-16 02:21:14,965 [INFO] [Daemon] Pattern analysis complete — 0 patterns found
+2026-06-16 02:21:37,870 [INFO] [Daemon] JAN background daemon loop running
+2026-06-16 02:21:37,870 [INFO] [Daemon] JAN background daemon started
+2026-06-16 02:21:38,870 [INFO] [Daemon] System health — CPU: 13.9%, RAM: 55.9% used (6.6 GB free), Disk: 35.6% used (142.2 GB free)
+2026-06-16 02:21:38,871 [INFO] [Daemon] Pattern analysis complete — 0 patterns found
+2026-06-16 02:22:07,643 [INFO] [Daemon] Preference learning complete — {'status': 'ok', 'extracted': {}, 'saved': {}}
+2026-06-16 02:22:07,647 [INFO] [Daemon] ♥ Heartbeat — uptime: 0h 0m 29s, modules wired: 6/6, low_power: False, camera_watch: False, process RSS: 502.8 MB
+2026-06-16 02:22:17,648 [INFO] [Daemon] JAN background daemon loop exited
+2026-06-16 02:22:17,648 [INFO] [Daemon] JAN background daemon stopped
+2026-06-16 02:22:31,558 [INFO] [Daemon] JAN background daemon loop running
+2026-06-16 02:22:31,559 [INFO] [Daemon] JAN background daemon started
+2026-06-16 02:22:32,560 [INFO] [Daemon] System health — CPU: 14.9%, RAM: 40.5% used (8.9 GB free), Disk: 35.6% used (142.2 GB free)
+2026-06-16 02:22:32,560 [INFO] [Daemon] Pattern analysis complete — 0 patterns found
+2026-06-16 02:22:45,121 [INFO] [Daemon] Preference learning complete — {'status': 'ok', 'extracted': {}, 'saved': {}}
+2026-06-16 02:22:45,121 [INFO] [Daemon] ♥ Heartbeat — uptime: 0h 0m 13s, modules wired: 6/6, low_power: False, camera_watch: False, process RSS: 980.9 MB
+2026-06-16 02:24:45,123 [INFO] [Daemon] JAN background daemon loop exited
+2026-06-16 02:24:45,123 [INFO] [Daemon] JAN background daemon stopped
+2026-06-16 02:24:51,433 [INFO] [Daemon] JAN background daemon loop running
+2026-06-16 02:24:51,433 [INFO] [Daemon] JAN background daemon started
+2026-06-16 02:24:52,434 [INFO] [Daemon] System health — CPU: 6.4%, RAM: 42.0% used (8.7 GB free), Disk: 35.7% used (142.0 GB free)
+2026-06-16 02:24:52,436 [INFO] [Daemon] Pattern analysis complete — 0 patterns found
+2026-06-16 02:24:53,705 [INFO] [Daemon] Preference learning complete — {'status': 'ok', 'extracted': {'language': 'English', 'hobby': None, 'food': None, 'music_genre': None, 'work_schedule': None, 'city': None, 'name': None}, 'saved': {'language': 'English', 'hobby': None, 'food': None, 'music_genre': None, 'work_schedule': None, 'city': None, 'name': None}}
+2026-06-16 02:24:53,705 [INFO] [Daemon] ♥ Heartbeat — uptime: 0h 0m 2s, modules wired: 6/6, low_power: False, camera_watch: False, process RSS: 980.7 MB
+2026-06-16 02:27:53,707 [INFO] [Daemon] JAN background daemon loop exited
+2026-06-16 02:27:53,708 [INFO] [Daemon] JAN background daemon stopped
+2026-06-16 02:28:03,156 [INFO] [Daemon] JAN background daemon loop running
+2026-06-16 02:28:03,156 [INFO] [Daemon] JAN background daemon started
+2026-06-16 02:28:04,157 [INFO] [Daemon] System health — CPU: 1.4%, RAM: 50.5% used (7.4 GB free), Disk: 35.7% used (142.0 GB free)
+2026-06-16 02:28:04,157 [INFO] [Daemon] Pattern analysis complete — 0 patterns found
+2026-06-16 02:28:06,045 [INFO] [Daemon] Preference learning complete — {'status': 'ok', 'extracted': {'favorite_music': '', 'preferred_language': 'English', 'hobby': ''}, 'saved': {'favorite_music': '', 'preferred_language': 'English', 'hobby': ''}}
+2026-06-16 02:28:06,045 [INFO] [Daemon] ♥ Heartbeat — uptime: 0h 0m 2s, modules wired: 6/6, low_power: False, camera_watch: False, process RSS: 1036.1 MB
+2026-06-16 02:28:56,045 [INFO] [Daemon] JAN background daemon loop exited
+2026-06-16 02:28:56,046 [INFO] [Daemon] JAN background daemon stopped
+2026-06-16 02:29:00,716 [INFO] [Daemon] JAN background daemon loop running
+2026-06-16 02:29:00,716 [INFO] [Daemon] JAN background daemon started
+2026-06-16 02:29:01,717 [INFO] [Daemon] System health — CPU: 0.9%, RAM: 48.7% used (7.7 GB free), Disk: 35.7% used (142.0 GB free)
+2026-06-16 02:29:01,717 [INFO] [Daemon] Pattern analysis complete — 0 patterns found
+2026-06-16 02:29:03,241 [INFO] [Daemon] Preference learning complete — {'status': 'ok', 'extracted': {'name': 'unknown', 'language': 'english'}, 'saved': {'name': 'unknown', 'language': 'english'}}
+2026-06-16 02:29:03,242 [INFO] [Daemon] ♥ Heartbeat — uptime: 0h 0m 2s, modules wired: 6/6, low_power: False, camera_watch: False, process RSS: 1037.3 MB
+2026-06-16 02:31:13,243 [INFO] [Daemon] JAN background daemon loop exited
+2026-06-16 02:31:13,243 [INFO] [Daemon] JAN background daemon stopped
+2026-06-16 02:31:21,098 [INFO] [Daemon] JAN background daemon loop running
+2026-06-16 02:31:21,098 [INFO] [Daemon] JAN background daemon started
+2026-06-16 02:31:22,099 [INFO] [Daemon] System health — CPU: 3.3%, RAM: 48.8% used (7.7 GB free), Disk: 35.7% used (142.0 GB free)
+2026-06-16 02:31:22,100 [INFO] [Daemon] Pattern analysis complete — 0 patterns found
+2026-06-16 02:31:22,718 [INFO] [Daemon] Preference learning complete — {'status': 'ok', 'extracted': {'name': 'John', 'favorite_music': 'rock'}, 'saved': {'name': 'John', 'favorite_music': 'rock'}}
+2026-06-16 02:31:22,718 [INFO] [Daemon] ♥ Heartbeat — uptime: 0h 0m 1s, modules wired: 6/6, low_power: False, camera_watch: False, process RSS: 990.4 MB
+2026-06-16 02:32:52,721 [INFO] [Daemon] JAN background daemon loop exited
+2026-06-16 02:32:52,721 [INFO] [Daemon] JAN background daemon stopped
+2026-06-16 02:33:02,564 [INFO] [Daemon] JAN background daemon loop running
+2026-06-16 02:33:02,565 [INFO] [Daemon] JAN background daemon started
+2026-06-16 02:33:03,567 [INFO] [Daemon] System health — CPU: 5.3%, RAM: 48.0% used (7.8 GB free), Disk: 35.7% used (142.0 GB free)
+2026-06-16 02:33:03,567 [INFO] [Daemon] Pattern analysis complete — 0 patterns found
+2026-06-16 02:33:05,546 [INFO] [Daemon] Preference learning complete — {'status': 'ok', 'extracted': {'preferred_language': 'english', 'city': 'lahore'}, 'saved': {'preferred_language': 'english', 'city': 'lahore'}}
+2026-06-16 02:33:05,546 [INFO] [Daemon] ♥ Heartbeat — uptime: 0h 0m 2s, modules wired: 6/6, low_power: False, camera_watch: False, process RSS: 992.6 MB
+2026-06-16 02:38:06,550 [INFO] [Daemon] System health — CPU: 10.1%, RAM: 56.3% used (6.5 GB free), Disk: 35.7% used (142.0 GB free)
+2026-06-16 02:38:06,551 [INFO] [Daemon] ♥ Heartbeat — uptime: 0h 5m 3s, modules wired: 6/6, low_power: False, camera_watch: False, process RSS: 1344.9 MB
+2026-06-16 02:38:46,551 [INFO] [Daemon] JAN background daemon loop exited
+2026-06-16 02:38:46,551 [INFO] [Daemon] JAN background daemon stopped
+2026-06-16 02:38:50,644 [INFO] [Daemon] JAN background daemon loop running
+2026-06-16 02:38:50,644 [INFO] [Daemon] JAN background daemon started
+2026-06-16 02:38:51,645 [INFO] [Daemon] System health — CPU: 3.8%, RAM: 56.5% used (6.5 GB free), Disk: 35.7% used (142.0 GB free)
+2026-06-16 02:38:51,645 [INFO] [Daemon] Pattern analysis complete — 0 patterns found
+2026-06-16 02:38:52,717 [INFO] [Daemon] Preference learning complete — {'status': 'ok', 'extracted': {'location': 'Pakistan', 'language': 'English'}, 'saved': {'location': 'Pakistan', 'language': 'English'}}
+2026-06-16 02:38:52,717 [INFO] [Daemon] ♥ Heartbeat — uptime: 0h 0m 2s, modules wired: 6/6, low_power: False, camera_watch: False, process RSS: 1037.3 MB
+2026-06-16 02:43:53,721 [INFO] [Daemon] System health — CPU: 2.8%, RAM: 44.7% used (8.3 GB free), Disk: 35.7% used (142.0 GB free)
+2026-06-16 02:43:53,723 [INFO] [Daemon] ♥ Heartbeat — uptime: 0h 5m 3s, modules wired: 6/6, low_power: False, camera_watch: False, process RSS: 1065.9 MB
+2026-06-16 02:48:54,726 [INFO] [Daemon] System health — CPU: 3.4%, RAM: 34.8% used (9.8 GB free), Disk: 35.7% used (142.0 GB free)
+2026-06-16 02:48:54,727 [INFO] [Daemon] ♥ Heartbeat — uptime: 0h 10m 4s, modules wired: 6/6, low_power: False, camera_watch: False, process RSS: 1062.9 MB
+2026-06-16 02:53:55,730 [INFO] [Daemon] System health — CPU: 2.5%, RAM: 37.6% used (9.3 GB free), Disk: 35.7% used (142.0 GB free)
+2026-06-16 02:53:55,730 [INFO] [Daemon] ♥ Heartbeat — uptime: 0h 15m 5s, modules wired: 6/6, low_power: False, camera_watch: False, process RSS: 1062.7 MB
+2026-06-16 02:54:05,731 [INFO] [Daemon] JAN background daemon loop exited
+2026-06-16 02:54:05,731 [INFO] [Daemon] JAN background daemon stopped
+2026-06-17 15:01:38,649 [INFO] [Daemon] JAN background daemon loop running
+2026-06-17 15:01:38,649 [INFO] [Daemon] JAN background daemon started
+2026-06-17 15:01:39,650 [INFO] [Daemon] System health — CPU: 12.9%, RAM: 51.3% used (7.3 GB free), Disk: 36.4% used (140.4 GB free)
+2026-06-17 15:01:39,652 [INFO] [Daemon] Pattern analysis complete — 0 patterns found
+2026-06-17 15:02:04,449 [INFO] [Daemon] Preference learning complete — {'status': 'ok', 'extracted': {}, 'saved': {}}
+2026-06-17 15:02:04,449 [INFO] [Daemon] ♥ Heartbeat — uptime: 0h 0m 25s, modules wired: 6/6, low_power: False, camera_watch: False, process RSS: 758.2 MB
+2026-06-17 15:06:45,460 [INFO] [Daemon] System health — CPU: 3.8%, RAM: 39.5% used (9.0 GB free), Disk: 36.4% used (140.4 GB free)
+2026-06-17 15:06:45,461 [INFO] [Daemon] ♥ Heartbeat — uptime: 0h 5m 6s, modules wired: 6/6, low_power: False, camera_watch: False, process RSS: 224.8 MB
+2026-06-18 00:17:50,815 [INFO] [Daemon] JAN background daemon loop running
+2026-06-18 00:17:50,815 [INFO] [Daemon] JAN background daemon started
+2026-06-18 00:17:51,815 [INFO] [Daemon] System health — CPU: 11.4%, RAM: 71.0% used (4.3 GB free), Disk: 37.1% used (138.8 GB free)
+2026-06-18 00:17:51,816 [INFO] [Daemon] Pattern analysis complete — 0 patterns found
+2026-06-18 00:18:20,121 [INFO] [Daemon] Preference learning complete — {'status': 'ok', 'extracted': {}, 'saved': {}}
+2026-06-18 00:18:20,122 [INFO] [Daemon] ♥ Heartbeat — uptime: 0h 0m 29s, modules wired: 6/6, low_power: False, camera_watch: False, process RSS: 586.6 MB
+2026-06-18 00:20:33,765 [INFO] [Daemon] JAN background daemon loop running
+2026-06-18 00:20:33,766 [INFO] [Daemon] JAN background daemon started
+2026-06-18 00:20:34,766 [INFO] [Daemon] System health — CPU: 11.7%, RAM: 62.7% used (5.6 GB free), Disk: 37.1% used (138.8 GB free)
+2026-06-18 00:20:34,767 [INFO] [Daemon] Pattern analysis complete — 0 patterns found
+2026-06-18 00:20:45,479 [INFO] [Daemon] Preference learning complete — {'status': 'ok', 'extracted': {'username': 'Jan', 'email_provider': 'gmail', 'browser': 'operagx', 'music_service': 'youtube', 'spotify_artist': 'Hukus Bukus', 'city': '', 'food': '', 'work_schedule': '', 'hobbies': [], 'location': ''}, 'saved': {'username': 'Jan', 'email_provider': 'gmail', 'browser': 'operagx', 'music_service': 'youtube', 'spotify_artist': 'Hukus Bukus', 'city': '', 'food': '', 'work_schedule': '', 'hobbies': [], 'location': ''}}
+2026-06-18 00:20:45,479 [INFO] [Daemon] ♥ Heartbeat — uptime: 0h 0m 11s, modules wired: 6/6, low_power: False, camera_watch: False, process RSS: 1054.6 MB
+2026-06-18 00:22:45,547 [INFO] [Daemon] JAN background daemon loop exited
+2026-06-18 00:22:45,549 [INFO] [Daemon] JAN background daemon stopped
+2026-06-18 00:23:01,067 [INFO] [Daemon] JAN background daemon loop running
+2026-06-18 00:23:01,067 [INFO] [Daemon] JAN background daemon started
+2026-06-18 00:23:02,068 [INFO] [Daemon] System health — CPU: 13.5%, RAM: 61.3% used (5.8 GB free), Disk: 37.1% used (138.8 GB free)
+2026-06-18 00:23:02,069 [INFO] [Daemon] Pattern analysis complete — 0 patterns found
+2026-06-18 00:23:10,685 [INFO] [Daemon] Preference learning complete — {'status': 'ok', 'extracted': {}, 'saved': {}}
+2026-06-18 00:23:10,685 [INFO] [Daemon] ♥ Heartbeat — uptime: 0h 0m 9s, modules wired: 6/6, low_power: False, camera_watch: False, process RSS: 754.0 MB
+2026-06-18 00:28:11,695 [INFO] [Daemon] System health — CPU: 6.2%, RAM: 63.5% used (5.5 GB free), Disk: 37.1% used (138.8 GB free)
+2026-06-18 00:28:11,696 [INFO] [Daemon] ♥ Heartbeat — uptime: 0h 5m 10s, modules wired: 6/6, low_power: False, camera_watch: False, process RSS: 688.1 MB
+2026-06-18 00:33:12,711 [INFO] [Daemon] System health — CPU: 2.3%, RAM: 63.2% used (5.5 GB free), Disk: 37.1% used (138.7 GB free)
+2026-06-18 00:33:12,713 [INFO] [Daemon] ♥ Heartbeat — uptime: 0h 10m 11s, modules wired: 6/6, low_power: False, camera_watch: False, process RSS: 690.7 MB
+2026-06-18 00:38:13,721 [INFO] [Daemon] System health — CPU: 15.8%, RAM: 59.2% used (6.1 GB free), Disk: 37.2% used (138.7 GB free)
+2026-06-18 00:38:13,722 [INFO] [Daemon] ♥ Heartbeat — uptime: 0h 15m 12s, modules wired: 6/6, low_power: False, camera_watch: False, process RSS: 648.4 MB
+2026-06-21 18:41:28,371 [INFO] [Daemon] JAN background daemon loop running
+2026-06-21 18:41:28,371 [INFO] [Daemon] JAN background daemon started
+2026-06-21 18:41:29,372 [INFO] [Daemon] System health — CPU: 21.1%, RAM: 55.3% used (6.7 GB free), Disk: 50.4% used (109.5 GB free)
+2026-06-21 18:41:29,372 [INFO] [Daemon] Pattern analysis complete — 0 patterns found
+2026-06-21 18:41:58,296 [INFO] [Daemon] Preference learning complete — {'status': 'ok', 'extracted': {'favorite_music': 'pop', 'location': 'unknown', 'email_address': 'i222047@gmail.com'}, 'saved': {'favorite_music': 'pop', 'location': 'unknown', 'email_address': 'i222047@gmail.com'}}
+2026-06-21 18:41:58,301 [INFO] [Daemon] ♥ Heartbeat — uptime: 0h 0m 29s, modules wired: 6/6, low_power: False, camera_watch: False, process RSS: 229.4 MB
+2026-06-21 18:46:39,334 [INFO] [Daemon] System health — CPU: 3.1%, RAM: 35.2% used (9.7 GB free), Disk: 50.4% used (109.5 GB free)
+2026-06-21 18:46:39,334 [INFO] [Daemon] ♥ Heartbeat — uptime: 0h 5m 10s, modules wired: 6/6, low_power: False, camera_watch: False, process RSS: 286.3 MB
+2026-06-21 18:47:59,335 [INFO] [Daemon] JAN background daemon loop exited
+2026-06-21 18:47:59,342 [INFO] [Daemon] JAN background daemon stopped
+2026-06-22 02:44:55,321 [INFO] [Daemon] JAN background daemon loop running
+2026-06-22 02:44:55,321 [INFO] [Daemon] JAN background daemon started
+2026-06-22 02:44:56,322 [INFO] [Daemon] System health — CPU: 10.4%, RAM: 47.5% used (7.9 GB free), Disk: 50.2% used (109.9 GB free)
+2026-06-22 02:44:56,322 [INFO] [Daemon] Pattern analysis complete — 0 patterns found
+2026-06-22 02:45:20,148 [INFO] [Daemon] Preference learning complete — {'status': 'ok', 'extracted': {'title': 'Hypnotic', 'artist': 'Deep Dhaliwal'}, 'saved': {'title': 'Hypnotic', 'artist': 'Deep Dhaliwal'}}
+2026-06-22 02:45:20,148 [INFO] [Daemon] ♥ Heartbeat — uptime: 0h 0m 24s, modules wired: 6/6, low_power: False, camera_watch: False, process RSS: 1106.1 MB
+2026-06-22 02:50:01,152 [INFO] [Daemon] System health — CPU: 8.1%, RAM: 58.1% used (6.3 GB free), Disk: 50.2% used (109.9 GB free)
+2026-06-22 02:50:01,152 [INFO] [Daemon] ♥ Heartbeat — uptime: 0h 5m 5s, modules wired: 6/6, low_power: False, camera_watch: False, process RSS: 1123.4 MB
+2026-06-22 02:55:01,155 [INFO] [Daemon] JAN background daemon loop exited
+2026-06-22 02:55:01,156 [INFO] [Daemon] JAN background daemon stopped

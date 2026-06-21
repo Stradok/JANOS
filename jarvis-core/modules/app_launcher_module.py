@@ -2,66 +2,27 @@
 import subprocess
 import os
 import json
+import shutil
+import webbrowser
 from pathlib import Path
 from .base import ModuleBase
 
-try:
-    import pygetwindow as gw
-    GW_AVAILABLE = True
-except ImportError:
-    GW_AVAILABLE = False
-
 
 class AppLauncherModule(ModuleBase):
-    """Launch, close, minimize, maximize any application on Windows."""
+    """Launch, close, minimize, maximize any application on Linux."""
 
-    # Default app registry — maps friendly names to executable paths / commands
     DEFAULT_APPS = {
-        "spotify": {
-            "path": r"shell:AppsFolder\SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify",
-            "type": "shell"
-        },
-        "opera": {
-            "path": r"C:\Users\strad\AppData\Local\Programs\Opera GX\opera.exe",
-            "type": "exe"
-        },
-        "opera gx": {
-            "path": r"C:\Users\strad\AppData\Local\Programs\Opera GX\opera.exe",
-            "type": "exe"
-        },
-        "browser": {
-            "path": r"C:\Users\strad\AppData\Local\Programs\Opera GX\opera.exe",
-            "type": "exe"
-        },
-        "chrome": {
-            "path": r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-            "type": "exe"
-        },
-        "brave": {
-            "path": r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
-            "type": "exe"
-        },
-        "firefox": {
-            "path": r"C:\Program Files\Mozilla Firefox\firefox.exe",
-            "type": "exe"
-        },
-        "notepad": {"path": "notepad.exe", "type": "exe"},
-        "calculator": {"path": "calc.exe", "type": "exe"},
-        "file explorer": {"path": "explorer.exe", "type": "exe"},
-        "explorer": {"path": "explorer.exe", "type": "exe"},
-        "terminal": {"path": "wt.exe", "type": "exe"},
-        "powershell": {"path": "powershell.exe", "type": "exe"},
-        "cmd": {"path": "cmd.exe", "type": "exe"},
-        "task manager": {"path": "taskmgr.exe", "type": "exe"},
-        "settings": {"path": "ms-settings:", "type": "shell"},
-        "vscode": {
-            "path": r"C:\Users\strad\AppData\Local\Programs\Microsoft VS Code\Code.exe",
-            "type": "exe"
-        },
-        "cursor": {
-            "path": r"C:\Users\strad\AppData\Local\Programs\cursor\Cursor.exe",
-            "type": "exe"
-        },
+        "browser": {"cmd": ["xdg-open", "https://google.com"], "type": "cmd"},
+        "chrome": {"cmd": ["google-chrome"], "type": "which", "fallback": ["google-chrome-stable"]},
+        "firefox": {"cmd": ["firefox"], "type": "which"},
+        "brave": {"cmd": ["brave-browser"], "type": "which"},
+        "terminal": {"cmd": ["gnome-terminal"], "type": "which"},
+        "file manager": {"cmd": ["nautilus", "."], "type": "which", "fallback": ["dolphin", "thunar", "nemo"]},
+        "calculator": {"cmd": ["gnome-calculator"], "type": "which", "fallback": ["kcalc", "qalculate-gtk"]},
+        "vscode": {"cmd": ["code"], "type": "which"},
+        "cursor": {"cmd": ["cursor"], "type": "which"},
+        "spotify": {"cmd": ["spotify"], "type": "which"},
+        "settings": {"cmd": ["gnome-control-center"], "type": "which", "fallback": ["systemsettings"]},
     }
 
     def __init__(self):
@@ -101,88 +62,86 @@ class AppLauncherModule(ModuleBase):
         app = self._find_app(name)
         if app:
             try:
-                if app["type"] == "shell":
-                    subprocess.Popen(["explorer", app["path"]])
+                if app["type"] == "which":
+                    cmd = shutil.which(app["cmd"][0])
+                    if not cmd and "fallback" in app:
+                        for fb in app["fallback"]:
+                            cmd = shutil.which(fb)
+                            if cmd:
+                                break
+                    if cmd:
+                        subprocess.Popen([cmd] + app["cmd"][1:] + (args if isinstance(args, list) else [args] if args else []))
+                    else:
+                        return {"error": f"'{name}' not found on system"}
+                elif app["type"] == "cmd":
+                    subprocess.Popen(app["cmd"])
                 else:
-                    cmd = [app["path"]]
-                    if args:
-                        cmd.extend(args if isinstance(args, list) else [args])
-                    subprocess.Popen(cmd)
+                    subprocess.Popen(app["cmd"])
                 return {"status": "ok", "message": f"Opened {name}"}
             except Exception as e:
                 return {"error": f"Failed to open {name}: {str(e)}"}
         else:
-            # try opening directly as a command
             try:
-                subprocess.Popen(["start", name], shell=True)
-                return {"status": "ok", "message": f"Attempted to open '{name}' via Windows start"}
+                cmd = shutil.which(name)
+                if cmd:
+                    subprocess.Popen([cmd])
+                    return {"status": "ok", "message": f"Opened '{name}' via PATH"}
+                return {"error": f"App '{name}' not found in registry or PATH"}
             except Exception as e:
-                return {"error": f"App '{name}' not found in registry and could not start directly: {str(e)}"}
+                return {"error": f"App '{name}' not found: {str(e)}"}
 
     def _close_app(self, name):
-        if not GW_AVAILABLE:
-            return {"error": "pygetwindow not installed"}
-        windows = gw.getWindowsWithTitle(name)
-        if not windows:
-            return {"error": f"No window found with title containing '{name}'"}
-        closed = []
-        for w in windows:
+        try:
+            subprocess.run(["wmctrl", "-c", name], capture_output=True, text=True, timeout=5)
+            return {"status": "ok", "message": f"Requested close of '{name}'"}
+        except FileNotFoundError:
             try:
-                w.close()
-                closed.append(w.title)
-            except Exception:
-                pass
-        return {"status": "ok", "message": f"Closed: {closed}"}
+                import i3ipc
+                conn = i3ipc.Connection()
+                for w in conn.get_tree():
+                    if name.lower() in w.name.lower():
+                        w.command("kill")
+                return {"status": "ok", "message": f"Closed '{name}' via i3"}
+            except ImportError:
+                try:
+                    subprocess.run(["xdotool", "search", "--name", name, "windowkill"], capture_output=True, timeout=5)
+                    return {"status": "ok", "message": f"Closed '{name}' via xdotool"}
+                except (FileNotFoundError, Exception):
+                    return {"error": "Install wmctrl, i3ipc, or xdotool for window management"}
 
     def _minimize_app(self, name):
-        if not GW_AVAILABLE:
-            return {"error": "pygetwindow not installed"}
-        windows = gw.getWindowsWithTitle(name)
-        if not windows:
-            return {"error": f"No window found with title containing '{name}'"}
-        for w in windows:
-            try:
-                w.minimize()
-            except Exception:
-                pass
-        return {"status": "ok", "message": f"Minimized {name}"}
+        try:
+            subprocess.run(["xdotool", "search", "--name", name, "windowminimize"], capture_output=True, timeout=5)
+            return {"status": "ok", "message": f"Minimized {name}"}
+        except FileNotFoundError:
+            return {"error": "xdotool not installed"}
 
     def _maximize_app(self, name):
-        if not GW_AVAILABLE:
-            return {"error": "pygetwindow not installed"}
-        windows = gw.getWindowsWithTitle(name)
-        if not windows:
-            return {"error": f"No window found with title containing '{name}'"}
-        for w in windows:
-            try:
-                w.maximize()
-                w.activate()
-            except Exception:
-                pass
-        return {"status": "ok", "message": f"Maximized {name}"}
+        try:
+            subprocess.run(["xdotool", "search", "--name", name, "windowstate", "--add", "maximized_vert", "maximized_horz"], capture_output=True, timeout=5)
+            return {"status": "ok", "message": f"Maximized {name}"}
+        except FileNotFoundError:
+            return {"error": "xdotool not installed"}
 
     def _focus_app(self, name):
-        if not GW_AVAILABLE:
-            return {"error": "pygetwindow not installed"}
-        windows = gw.getWindowsWithTitle(name)
-        if not windows:
-            return {"error": f"No window found with title containing '{name}'"}
         try:
-            windows[0].activate()
-            return {"status": "ok", "message": f"Focused on {windows[0].title}"}
+            subprocess.run(["xdotool", "search", "--name", name, "windowactivate"], capture_output=True, timeout=5)
+            return {"status": "ok", "message": f"Focused on {name}"}
+        except FileNotFoundError:
+            return {"error": "xdotool not installed"}
         except Exception as e:
             return {"error": str(e)}
 
     def _list_windows(self):
-        if not GW_AVAILABLE:
-            return {"error": "pygetwindow not installed"}
-        titles = [w.title for w in gw.getAllWindows() if w.title.strip()]
-        return {"status": "ok", "windows": titles}
+        try:
+            result = subprocess.run(["wmctrl", "-l"], capture_output=True, text=True, timeout=5)
+            windows = [line.strip() for line in result.stdout.split("\n") if line.strip()]
+            return {"status": "ok", "windows": windows}
+        except FileNotFoundError:
+            return {"error": "wmctrl not installed"}
 
-    def _register_app(self, name, path):
-        """Register a new app mapping."""
-        self.apps[name.lower()] = {"path": path, "type": "exe"}
-        # save to custom file
+    def _register_app(self, name, path_or_cmd):
+        self.apps[name.lower()] = {"cmd": path_or_cmd.split() if isinstance(path_or_cmd, str) else path_or_cmd, "type": "which"}
         custom = {}
         if self.custom_apps_file.exists():
             try:
@@ -190,9 +149,9 @@ class AppLauncherModule(ModuleBase):
                     custom = json.load(f)
             except Exception:
                 pass
-        custom[name.lower()] = {"path": path, "type": "exe"}
+        custom[name.lower()] = path_or_cmd
         self._save_custom_apps(custom)
-        return {"status": "ok", "message": f"Registered '{name}' → {path}"}
+        return {"status": "ok", "message": f"Registered '{name}' → {path_or_cmd}"}
 
     def process(self, input_data):
         action = input_data.get("action", "open")

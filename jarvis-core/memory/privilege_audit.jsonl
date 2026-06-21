@@ -1,0 +1,2 @@
+{"timestamp": "2026-06-15T21:35:46.609126+00:00", "command": "echo hello", "cwd": "/home/amman/Desktop/JANOS/jarvis-core", "sudo": false, "justification": "User requested: echo hello", "destructive": false, "status": "ok", "exit_code": 0}
+{"timestamp": "2026-06-15T21:37:42.076548+00:00", "command": "echo hi", "cwd": "/home/amman/Desktop/JANOS/jarvis-core", "sudo": false, "justification": "User requested: echo hi", "destructive": false, "status": "ok", "exit_code": 0}

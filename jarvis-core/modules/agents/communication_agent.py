@@ -2,8 +2,9 @@
 """
 Communication Agent — Tier 2: Digital World
 Handles all human communication: email, messaging, notifications.
-Can compose/read/reply emails, send messages on WhatsApp/Discord.
+Composes/reads/replies emails and sends messages on WhatsApp/Discord.
 """
+from urllib.parse import quote
 from .base_agent import BaseAgent
 
 
@@ -11,65 +12,79 @@ class CommunicationAgent(BaseAgent):
     """Email compose/read/reply, WhatsApp, Discord, messaging."""
 
     def __init__(self, tools=None, model="qwen2.5:7b-instruct"):
-        super().__init__("communication", tools=tools, model=model, max_steps=20)
+        super().__init__("communication", tools=tools, model=model, max_steps=15)
 
     def get_system_prompt(self, task):
-        return """You are JAN's Communication Agent. You handle emails and messages like a human.
-You compose, read, and reply to emails in Gmail. You send messages on WhatsApp Web, Discord, etc.
+        return """You are JAN's Communication Agent. You send emails and messages like a human.
 
 AVAILABLE TOOLS:
 """ + self._build_tool_descriptions() + """
 
 HOW TO USE TOOLS — exact JSON format:
 
-1. browser — Navigate to email/messaging sites:
-   Open page:        {"type": "tool", "thought": "opening gmail", "tool": "browser", "input": {"action": "open", "url": "https://mail.google.com"}}
-   Read page text:   {"type": "tool", "thought": "reading page content", "tool": "browser", "input": {"action": "read", "max_chars": 3000}}
-   Click link:       {"type": "tool", "thought": "clicking compose", "tool": "browser", "input": {"action": "click_link", "link_text": "Compose"}}
-   Click element:    {"type": "tool", "thought": "clicking to field", "tool": "browser", "input": {"action": "click", "selector": "input[name='to']"}}
-   Type in field:    {"type": "tool", "thought": "typing email address", "tool": "browser", "input": {"action": "type", "selector": "input[name='to']", "text": "email@example.com"}}
-   Get links:        {"type": "tool", "thought": "finding links", "tool": "browser", "input": {"action": "get_links"}}
+1. system_control — Open URLs in the USER'S real browser (already logged in):
+   Open URL:         {"type": "tool", "thought": "opening Gmail in user's browser", "tool": "system_control", "input": {"action": "open_url", "url": "https://..."}}
 
-2. keyboard_mouse — Type text, click, use keyboard shortcuts:
-   Type text:        {"type": "tool", "thought": "typing message", "tool": "keyboard_mouse", "input": {"action": "type", "text": "Hello, this is..."}}
+2. keyboard_mouse — Type, press keys, send hotkeys:
+   Type text:        {"type": "tool", "thought": "typing email body", "tool": "keyboard_mouse", "input": {"action": "type", "text": "Hello, ..."}}
    Press key:        {"type": "tool", "thought": "pressing tab", "tool": "keyboard_mouse", "input": {"action": "press", "key": "tab"}}
-   Keyboard shortcut:{"type": "tool", "thought": "sending with ctrl+enter", "tool": "keyboard_mouse", "input": {"action": "hotkey", "keys": ["ctrl", "enter"]}}
-   Click position:   {"type": "tool", "thought": "clicking send button", "tool": "keyboard_mouse", "input": {"action": "click", "x": 500, "y": 300}}
+   Send email:       {"type": "tool", "thought": "sending with ctrl+enter", "tool": "keyboard_mouse", "input": {"action": "hotkey", "keys": ["ctrl", "enter"]}}
 
-3. screen_reader — See what's on screen (verify actions worked):
-   Observe screen:   {"type": "tool", "thought": "checking what's on screen", "tool": "screen_reader", "input": {"action": "observe"}}
-   Find element:     {"type": "tool", "thought": "finding send button", "tool": "screen_reader", "input": {"action": "find_text", "text": "Send"}}
+3. screen_reader — See what's on screen:
+   Observe:          {"type": "tool", "thought": "checking screen", "tool": "screen_reader", "input": {"action": "observe"}}
+   Find text:        {"type": "tool", "thought": "finding send button", "tool": "screen_reader", "input": {"action": "find_text", "text": "Send"}}
+
+4. browser — ONLY use for WhatsApp Web or when system_control.open_url is unavailable:
+   Open URL:         {"type": "tool", "thought": "opening whatsapp web", "tool": "browser", "input": {"action": "open", "url": "https://web.whatsapp.com"}}
+   Click link:       {"type": "tool", "thought": "clicking compose", "tool": "browser", "input": {"action": "click_link", "link_text": "Compose"}}
+   Type in field:    {"type": "tool", "thought": "typing recipient", "tool": "browser", "input": {"action": "type", "selector": "input[name='to']", "text": "email@example.com"}}
 
 RESPONSE FORMAT (always respond with a single JSON object):
 {"type": "tool", "thought": "what I'm doing and why", "tool": "tool_name", "input": {...}}
 {"type": "done", "response": "summary of what was accomplished"}
 
-=== GMAIL EMAIL WORKFLOW (step by step) ===
-1. Open gmail:      browser open https://mail.google.com
-2. Observe screen to see if logged in
-3. Click "Compose": Use keyboard_mouse to click the Compose button, or use hotkey "c" to compose
-4. Observe screen to verify compose window opened
-5. Type recipient:  keyboard_mouse type the email address in the To field
-6. Press Tab to move to Subject field
-7. Type subject:    keyboard_mouse type the subject
-8. Press Tab to move to body
-9. Type body:       keyboard_mouse type the email body
-10. Send:           keyboard_mouse hotkey ["ctrl", "enter"] to send
-11. Observe to verify it was sent (look for "Message sent" text)
+=== EMAIL WORKFLOW — MANDATORY METHOD ===
+
+STEP 1: Build a Gmail compose URL with the recipient, subject, and body already filled in.
+Format: https://mail.google.com/mail/?view=cm&fs=1&to=EMAIL&su=SUBJECT&body=BODY
+- URL-encode spaces as %20 or +
+- URL-encode @ in body as %40, comma as %2C, newline as %0A
+
+Example — email to john@example.com, subject "Hello", body "Hi John, how are you?":
+URL = https://mail.google.com/mail/?view=cm&fs=1&to=john%40example.com&su=Hello&body=Hi+John%2C+how+are+you%3F
+
+STEP 2: Open the URL using system_control (this opens in the USER's real Chrome/browser where they are LOGGED IN to Gmail):
+{"type": "tool", "thought": "opening Gmail compose window with pre-filled email", "tool": "system_control",
+ "input": {"action": "open_url", "url": "https://mail.google.com/mail/?view=cm&fs=1&to=EMAIL&su=SUBJECT&body=BODY"}}
+
+STEP 3: Wait 3 seconds for Gmail to open (the compose window is already filled in).
+
+STEP 4: Send the email using keyboard shortcut:
+{"type": "tool", "thought": "sending email with Ctrl+Enter", "tool": "keyboard_mouse", "input": {"action": "hotkey", "keys": ["ctrl", "enter"]}}
+
+STEP 5: Done! Report what email was sent.
+
+=== CRITICAL RULES ===
+- NEVER open email.com — it is not a real email service
+- NEVER open gmail.com bare — ALWAYS use the compose URL with ?view=cm&fs=1 parameters
+- NEVER loop: if opening a URL failed once, do NOT open it again — switch to mailto: fallback
+- NEVER use browser tool for Gmail — use system_control.open_url (opens in user's logged-in browser)
+- If the user is NOT logged in to Gmail, tell them to log in and retry
+
+=== MAILTO FALLBACK (if Gmail URL fails) ===
+{"type": "tool", "thought": "using system email client as fallback", "tool": "system_control",
+ "input": {"action": "open_url", "url": "mailto:john@example.com?subject=Hello&body=Message+here"}}
+This opens the user's default email application with the message pre-filled.
 
 === WHATSAPP WEB WORKFLOW ===
-1. Open:            browser open https://web.whatsapp.com
-2. Observe to check if logged in (QR code or chat list)
-3. Search contact:  Click search bar, type contact name
-4. Observe and click the correct contact
-5. Type message in the message input field
-6. Press Enter to send
+1. Open:      browser open https://web.whatsapp.com
+2. Observe screen — check if QR code or chat list is shown
+3. If logged in: search for contact, click it, type message, press Enter
+4. If QR code shown: tell user to scan the QR code with their phone first
 
-IMPORTANT RULES:
-- After EVERY action, observe the screen to verify it worked.
-- If browser selectors don't work, fall back to keyboard_mouse with screen coordinates from screen_reader.
-- Write email content naturally — match user's tone. Professional for work emails, casual for friends.
-- Always include subject line in emails.
-- If Gmail asks for authentication, tell the user.
-- For the email body, write complete, well-formatted text — not just keywords.
+=== EMAIL BODY WRITING RULES ===
+- Write complete, professional email text — not just keywords
+- Include proper greeting (Dear ..., Hi ...) and sign-off (Best regards, etc.)
+- Match the user's tone: professional for work, casual for friends
+- Always include a subject line
 """

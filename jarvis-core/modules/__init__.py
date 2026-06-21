@@ -447,18 +447,18 @@ ORCHESTRATOR.learning_engine = LEARNING_ENGINE
 _AGENT_TOOL_MAP = {
     "chat": ["memory", "notes", "time", "weather", "math"],
     "browser": ["browser", "keyboard_mouse", "screen_reader"],
-    "media": ["spotify", "youtube", "browser", "keyboard_mouse", "screen_reader", "app_launcher"],
-    "communication": ["browser", "keyboard_mouse", "screen_reader", "smart_tts"],
+    "media": ["spotify", "youtube", "keyboard_mouse", "screen_reader", "app_launcher"],
+    "communication": ["system_control", "keyboard_mouse", "screen_reader", "browser", "smart_tts"],
     "research": ["web_search", "browser", "memory", "screen_reader", "keyboard_mouse"],
     "memory": ["memory", "notes", "proactive_learning"],
     "productivity": ["notes", "time", "weather", "memory", "smart_tts", "file_manager"],
     "file": ["file_manager", "keyboard_mouse", "screen_reader"],
-    "system": ["app_launcher", "system_control", "keyboard_mouse", "screen_reader"],
-    "coding": ["file_manager", "browser", "keyboard_mouse", "screen_reader", "module_generator"],
+    "system": ["app_launcher", "system_control", "file_manager", "keyboard_mouse", "screen_reader"],
+    "coding": ["file_manager", "browser", "keyboard_mouse", "screen_reader", "module_generator", "system_control"],
     "creative": ["file_manager", "browser", "keyboard_mouse", "notes", "memory"],
-    "automation": ["memory", "time", "notes"],
+    "automation": ["memory", "time", "notes", "system_control", "file_manager"],
     "vision": ["screen_reader", "keyboard_mouse", "vision", "person_recognition"],
-    "self_improvement": ["module_generator", "file_manager", "memory"],
+    "self_improvement": ["module_generator", "file_manager", "memory", "system_control", "web_search"],
 }
 
 # Model assignments per agent
@@ -519,3 +519,49 @@ ORCHESTRATOR_V2.feedback = FEEDBACK
 ORCHESTRATOR.recovery.learning_engine   = LEARNING_ENGINE
 ORCHESTRATOR_V2.recovery.learning_engine = LEARNING_ENGINE
 print("[JAN] Autonomous recovery engine and feedback module ready")
+
+# ========================
+# System self-discovery on startup
+# ========================
+def _probe_system():
+    """Run at startup so JAN knows what's installed and available on this PC."""
+    import subprocess, shutil
+    facts = []
+    # Installed media tools
+    for tool in ["spotify", "playerctl", "xdotool", "wmctrl", "xdg-open", "ffmpeg", "mpv", "vlc"]:
+        path = shutil.which(tool)
+        if path:
+            facts.append(f"{tool}: installed at {path}")
+    # GPU
+    try:
+        r = subprocess.run(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+                           capture_output=True, text=True, timeout=5)
+        if r.returncode == 0 and r.stdout.strip():
+            facts.append(f"GPU: {r.stdout.strip()}")
+    except Exception:
+        pass
+    # Flatpak / Snap apps
+    for pkg_mgr, cmd in [("flatpak", ["flatpak", "list", "--app", "--columns=name"]),
+                         ("snap", ["snap", "list"])]:
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
+            if r.returncode == 0 and "spotify" in r.stdout.lower():
+                facts.append(f"Spotify installed via {pkg_mgr}")
+        except Exception:
+            pass
+    if facts:
+        try:
+            MODULES["memory"].process({
+                "action": "save_knowledge",
+                "topic": "system_installed_tools",
+                "content": "Installed tools on this Linux PC: " + "; ".join(facts),
+                "source": "startup_probe",
+            })
+            print(f"[JAN] System probe: {len(facts)} tools detected")
+        except Exception:
+            pass
+
+try:
+    _probe_system()
+except Exception as _e:
+    print(f"[JAN] System probe failed: {_e}")

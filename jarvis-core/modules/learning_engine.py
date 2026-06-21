@@ -331,9 +331,9 @@ class LearningEngine(ModuleBase):
         "Pakistan current events and news",
         "popular music artists and songs 2024 2025",
         "how to write professional emails",
-        "how to use Windows 11 keyboard shortcuts",
-        "how to control media playback on Windows",
-        "how to automate tasks on Windows with Python",
+        "how to use Linux keyboard shortcuts",
+        "how to control media playback on Linux",
+        "how to automate tasks on Linux with Python",
         "best practices for web scraping with Python",
         "how to read and summarize web pages efficiently",
     ]

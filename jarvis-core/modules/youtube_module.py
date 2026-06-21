@@ -1,5 +1,7 @@
 # modules/youtube_module.py
 import json
+import os
+import sys
 import requests
 from .base import ModuleBase
 
@@ -19,9 +21,31 @@ class YouTubeModule(ModuleBase):
         super().__init__("youtube")
 
     def _search_youtube(self, query, max_results=5):
-        """Search YouTube and extract video results. Falls back to direct URL."""
+        """Search YouTube and extract video results. Falls back to yt-dlp search."""
         if not PLAYWRIGHT_AVAILABLE:
-            # Fallback: open YouTube search in system browser
+            # Fallback: use yt-dlp to search
+            try:
+                import subprocess, json
+                result = subprocess.run(
+                    [sys.executable, "-m", "yt_dlp", "--flat-playlist", "--dump-json",
+                     f"ytsearch{max_results}:{query}"],
+                    capture_output=True, text=True, timeout=30
+                )
+                videos = []
+                for line in result.stdout.strip().split("\n"):
+                    if line:
+                        data = json.loads(line)
+                        videos.append({
+                            "title": data.get("title", query),
+                            "url": f"https://www.youtube.com/watch?v={data.get('id', '')}",
+                            "channel": data.get("channel", "Unknown"),
+                            "views": str(data.get("view_count", "") or ""),
+                        })
+                if videos:
+                    return videos, None
+            except Exception:
+                pass
+            # Final fallback: open YouTube search in system browser
             import webbrowser
             search_url = f"https://www.youtube.com/results?search_query={query.replace(' ', '+')}"
             webbrowser.open(search_url)
@@ -29,7 +53,7 @@ class YouTubeModule(ModuleBase):
         try:
             pw = sync_playwright().start()
             browser = pw.chromium.launch(headless=True)
-            ctx = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+            ctx = browser.new_context(user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
             page = ctx.new_page()
 
             search_url = f"https://www.youtube.com/results?search_query={query.replace(' ', '+')}"
@@ -104,41 +128,42 @@ Respond with ONLY a JSON object: {{"pick": <number 1-{len(videos)}>, "reason": "
         except Exception:
             return {"video": videos[0], "reason": "Top result (LLM unavailable)"}
 
+    def _play_audio(self, url):
+        """Play audio from a video URL using yt-dlp + ffplay."""
+        import subprocess
+        try:
+            yt_dlp = os.path.join(os.path.dirname(sys.executable), "yt-dlp") if "venv" in sys.executable else "yt-dlp"
+            if not os.path.exists(yt_dlp):
+                yt_dlp = "yt-dlp"
+            proc = subprocess.Popen(
+                [sys.executable, "-m", "yt_dlp", "-f", "bestaudio", "-o", "-", url],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
+            )
+            subprocess.Popen(
+                ["ffplay", "-nodisp", "-autoexit", "-hide_banner", "-loglevel", "quiet", "-i", "pipe:0"],
+                stdin=proc.stdout, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+            return {"status": "ok", "message": "Playing audio via yt-dlp + ffplay", "url": url, "method": "yt-dlp"}
+        except Exception as e:
+            return {"error": f"Audio playback failed: {e}"}
+
     def _play_video(self, url):
-        """Open a YouTube video — Playwright for ad handling, or system browser as fallback."""
+        """Play a YouTube video — try audio playback first, fall back to browser."""
         if not url.startswith("http"):
             url = "https://" + url
 
-        if not PLAYWRIGHT_AVAILABLE:
-            # Fallback: open in user's default browser
-            import webbrowser
-            try:
-                webbrowser.open(url)
-                return {"status": "ok", "message": "Opened video in browser", "url": url, "method": "webbrowser"}
-            except Exception:
-                import os
-                os.startfile(url)
-                return {"status": "ok", "message": "Opened video in browser", "url": url, "method": "startfile"}
+        result = self._play_audio(url)
+        if "error" not in result:
+            return result
 
+        # Fallback: open in user's default browser
+        import webbrowser
         try:
-            pw = sync_playwright().start()
-            browser = pw.chromium.launch(
-                headless=False,
-                args=["--start-maximized"]
-            )
-            ctx = browser.new_context(
-                no_viewport=True,
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-            )
-            page = ctx.new_page()
-            page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            self._skip_ads(page)
-            self._pw = pw
-            self._browser = browser
-            self._page = page
-            return {"status": "ok", "message": "Playing video (ads handled)", "url": url}
-        except Exception as e:
-            return {"error": str(e)}
+            webbrowser.open(url)
+            return {"status": "ok", "message": "Opened video in browser", "url": url, "method": "webbrowser"}
+        except Exception:
+            webbrowser.open(url)
+            return {"status": "ok", "message": "Opened video in browser", "url": url, "method": "webbrowser2"}
 
     def _skip_ads(self, page):
         """Wait for and skip YouTube ads if they appear."""

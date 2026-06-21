@@ -25,7 +25,7 @@ class WebSearchModule(ModuleBase):
     def _search_ddg_api(self, query, max_results=5):
         """Scrape DuckDuckGo HTML lite page via requests (no JS needed)."""
         try:
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+            headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
             url = "https://html.duckduckgo.com/html/"
             resp = requests.post(url, data={"q": query}, headers=headers, timeout=15)
             resp.raise_for_status()
@@ -110,7 +110,7 @@ class WebSearchModule(ModuleBase):
         """Fetch and read a web page's text content."""
         # Try simple requests approach first (works for many pages)
         try:
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+            headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
             resp = requests.get(url, headers=headers, timeout=15)
             resp.raise_for_status()
             html = resp.text

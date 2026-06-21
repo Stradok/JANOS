@@ -1,8 +1,8 @@
 # JAN — Joint Autonomous Neural Agent
 
-**v2.0 · 29 modules · 14 specialized agents · fully offline · self-learning · BYO LLM**
+**v2.1 · Linux-native · 29 modules · 14 specialized agents · fully offline · self-learning · BYO LLM**
 
-JAN is a locally-running AI assistant that runs entirely on your machine via [Ollama](https://ollama.com). It controls your PC, browses the web, remembers everything, and autonomously learns new skills — no cloud APIs required.
+JAN is a locally-running AI assistant that runs entirely on your machine via [Ollama](https://ollama.com). It controls your Linux PC, browses the web, sends emails, plays Spotify, remembers everything, and autonomously learns new skills — no cloud APIs required.
 
 ---
 
@@ -13,16 +13,18 @@ JAN is a locally-running AI assistant that runs entirely on your machine via [Ol
 | Natural language chat | Ollama LLM (bring your own model) |
 | Speaks every response | Microsoft Edge TTS — Urdu + English auto-detect |
 | Always listening | Wake word "Hey JAN" → Whisper STT |
-| PC control | Open apps, type, click, screenshots, file ops |
-| Web research | DuckDuckGo scraping → LLM summary (no Playwright needed) |
-| YouTube + Spotify | Search and play via browser / pyautogui |
+| PC control + terminal | Full shell access via `system_control.run_shell`, app launcher |
+| Spotify (desktop app) | D-Bus MPRIS2 / xdotool / `spotify:search:` URI — never opens browser |
+| YouTube | Search and open via browser |
+| Email (Gmail) | Gmail compose URL → opens in your logged-in browser → Ctrl+Enter sends |
+| WhatsApp / Discord | WhatsApp Web, Discord via browser agent |
+| Web research | DuckDuckGo scraping → LLM summary |
 | Long-term memory | SQLite + ChromaDB vector search |
 | Self-learning RAG | Reads web pages → chunks → stores → injects into future prompts |
 | Generates new modules | Writes, validates, and hot-loads new Python modules at runtime |
 | Vision + face recognition | Webcam → OpenCV → face_recognition |
 | AR overlay | WebSocket server — phone camera streams to JAN |
 | Background daemon | Scheduled tasks, system monitoring, habit detection |
-| Windows service | Auto-starts on boot, auto-restarts on crash |
 
 ---
 
@@ -44,67 +46,68 @@ User speaks / types
  │  14 specialized agents, agentic loops    │
  └──────┬───────────────────────────────────┘
         │
-        ├── Agent executes tools (up to 20 steps per task)
+        ├── Agent executes tools (up to 15 steps per task)
         ├── RAG knowledge injected into every agent prompt
         ├── Skill memory: "what works" tips from past runs
-        ├── Auto-recall from long-term memory before run
+        ├── System probe at startup → saves installed tools to memory
+        ├── Auto-recall from long-term memory before each run
         ├── Auto-save conversation + result to memory after run
-        ├── Auto-speak response via Edge TTS
-        │
-        ▼
+        └── Auto-speak response via Edge TTS
+
  ┌─────────────┐
  │   Daemon    │  (background: schedules, monitoring, patterns)
  └─────────────┘
 ```
 
-### 14 Agents (7 Tiers)
+### 14 Agents
 
-| Tier | Agent | Max Steps | Handles |
+| Agent | Max Steps | Tools | Handles |
 |---|---|---|---|
-| 1 | chat | 5 | General Q&A, notes, time, weather, math |
-| 2 | browser | 15 | Web navigation, form filling |
-| 2 | media | 12 | Spotify, YouTube, app launcher |
-| 2 | communication | 20 | Email, messaging via browser |
-| 3 | research | 15 | Multi-step web research, summarization |
-| 3 | memory_agent | 5 | Memory recall and storage |
-| 4 | productivity | 8 | Notes, files, calendar, weather |
-| 4 | file | 10 | File/folder operations |
-| 5 | system | 10 | App management, system control |
-| 6 | coding | 15 | Code writing, file editing, module generation |
-| 6 | creative | 12 | Writing, brainstorming |
-| 7 | automation | 20 | Scheduled tasks, habit automation |
-| 7 | vision | 8 | Screen reading, face recognition |
-| 7 | self_improvement | 10 | Generates + hot-loads new modules |
+| chat | 5 | memory, notes, time, weather, math | General Q&A, conversation |
+| browser | 15 | browser, keyboard_mouse, screen_reader | Web navigation, forms |
+| media | 10 | **spotify**, youtube, keyboard_mouse, app_launcher | Spotify app control, YouTube |
+| communication | 15 | **system_control**, keyboard_mouse, browser, screen_reader | Gmail, WhatsApp, Discord |
+| research | 15 | web_search, browser, memory | Multi-step web research |
+| memory | 5 | memory, notes, proactive_learning | Memory recall and storage |
+| productivity | 8 | notes, time, weather, file_manager | Notes, reminders, files |
+| file | 10 | file_manager, keyboard_mouse, screen_reader | File/folder operations |
+| system | 15 | app_launcher, **system_control**, **file_manager**, keyboard_mouse | Shell commands, app control, system discovery |
+| coding | 15 | file_manager, browser, system_control, module_generator | Code writing, debugging |
+| creative | 12 | file_manager, browser, notes, memory | Writing, brainstorming |
+| automation | 20 | memory, time, system_control, file_manager | Scheduled tasks, workflows |
+| vision | 8 | screen_reader, keyboard_mouse, vision | Screen reading, face recognition |
+| self_improvement | 10 | module_generator, file_manager, memory, system_control, web_search | Generates new modules, learns new skills |
 
 ---
 
 ## Prerequisites
 
-### 1. System dependencies
-
-**Linux / Ubuntu:**
-```bash
-sudo apt install ffmpeg tesseract-ocr portaudio19-dev
-```
-
-**macOS:**
-```bash
-brew install ffmpeg tesseract portaudio
-```
-
-**Windows:**
-- [ffmpeg](https://ffmpeg.org/download.html) → add to PATH
-- [Tesseract](https://github.com/UB-Mannheim/tesseract/wiki) → add to PATH
-
-### 2. Ollama + models
+### 1. Ollama + models
 
 ```bash
 # Install Ollama from https://ollama.com
-# Then pull at least one LLM model for JAN to use
-ollama pull <your-model>   # e.g. llama3.1:8b, qwen2.5:7b-instruct, gemma4:12b, etc.
+ollama pull qwen2.5:7b-instruct    # default model for most agents
+ollama pull qwen2.5-coder:7b       # recommended for coding agent
 ```
 
-Set your chosen model in `config.yaml` under `models:` — you can assign different models to different agents.
+Set your chosen models in `config.yaml` under `models:` — you can assign different models to different agents.
+
+### 2. System dependencies
+
+```bash
+# Core (required)
+sudo apt install ffmpeg tesseract-ocr portaudio19-dev wmctrl
+
+# Recommended: better Spotify control (search without keyboard injection)
+sudo apt install xdotool playerctl
+
+# Optional: face recognition
+sudo apt install cmake libdlib-dev
+```
+
+> **Spotify**: JAN controls the **desktop app** via D-Bus MPRIS2 (`dbus-send`, built-in) + `wmctrl` for focusing + `xdg-open spotify:search:QUERY` for search. Install `playerctl` for the best experience. JAN never opens the web browser for Spotify.
+
+> **Email**: JAN opens your real Chrome/Firefox (where you're logged in to Gmail) using a pre-filled compose URL. No password access needed.
 
 ### 3. Python 3.10+
 
@@ -117,77 +120,138 @@ python --version   # must be 3.10 or higher
 ## Installation
 
 ```bash
-# Clone / enter the project
 cd jarvis-core
 
 # Create virtual environment
 python -m venv venv
-
-# Activate it
-source venv/bin/activate          # Linux / macOS
-venv\Scripts\activate             # Windows
+source venv/bin/activate
 
 # Install dependencies
 pip install -r requirements.txt
 ```
 
-> **Linux / macOS one-click setup:** `chmod +x setup.sh && ./setup.sh` — installs system deps, creates venv, installs pip packages, and sets up directories.
+> **One-click setup:** `chmod +x setup.sh && ./setup.sh` — installs system deps, creates venv, installs pip packages, initializes directories.
 
-> **Windows one-click install:** run `install.bat` — checks Python, installs deps, pulls Ollama models.
-
-### Optional: face recognition
+### Optional extras
 
 ```bash
-# Requires cmake + dlib headers
-pip install face-recognition resemblyzer
-```
-
-### Optional: wake word (always-listening "Hey JAN")
-
-```bash
+# Wake word ("Hey JAN")
 pip install pyaudio openwakeword
+
+# Face / voice recognition
+pip install face-recognition resemblyzer
+
+# Playwright for full browser automation (email compose, WhatsApp)
+pip install playwright && playwright install chromium
 ```
 
 ---
 
 ## Running JAN
 
-### Option A — Terminal chat (quickest, no server)
+The Makefile is the primary entry point for everything. Run `make help` to see all targets.
 
-```bash
-python demo.py
+```
+make <target>                   # default port 8000
+make <target> PORT=9000         # override port
 ```
 
-Type messages directly. No browser needed. Good for testing modules.
+### Setup
 
-### Option B — Full server (recommended)
+| Command | What it does |
+|---|---|
+| `make setup` | Full first-time setup — runs `setup.sh` (venv + deps + dirs) |
+| `make install` | Install Python dependencies from `requirements.txt` |
+| `make install-dev` | Install dev tools: ruff, black, pytest |
+| `make install-optional` | Install wake word, face recognition, Playwright |
 
-```bash
-# Make sure Ollama is running first
-ollama serve   # in a separate terminal if not auto-started
+### Running the server
 
-# Start JAN
-uvicorn main:app --host 0.0.0.0 --port 8000
-```
+| Command | What it does |
+|---|---|
+| `make dev` | Dev server on port 8000, auto-reload on file changes |
+| `make prod` | Production server, 2 workers, no reload |
+| `make start` | Alias for `make dev` |
+| `make open` | Open `http://localhost:8000` in your browser |
 
-Open **http://localhost:8000** — the JARVIS-style dark chat UI loads automatically.
+### Chatting with JAN
 
-### Option C — Windows service (boot-time auto-start)
+| Command | What it does |
+|---|---|
+| `make demo` | Standalone terminal chat — no server needed |
+| `make chat` | CLI against the running server (full Phase 2–5 pipeline) |
+| `make chat-v1` | CLI against the legacy v1 orchestrator |
 
-```bash
-# Standalone mode (no service install needed)
-python jan_service.py standalone
+### Health & status *(server must be running)*
 
-# Or copy startup.bat to your Windows Startup folder for boot-time launch
-```
+| Command | What it does |
+|---|---|
+| `make health` | `GET /health` — all phase status + agent list |
+| `make status` | `GET /api/status` — hardware, memory, LLM health |
+| `make rankings` | `GET /api/v3/rankings` — agent and model score rankings |
+| `make scores` | `GET /api/v5/scores` — ScoringEngine utility scores |
+| `make audit` | Runs all four checks in sequence |
 
-### Option D — EXE package
+### Testing
 
-```bash
-pip install pyinstaller
-python build_exe.py
-# Output: dist/JAN.exe
-```
+| Command | What it does |
+|---|---|
+| `make test` | Run all tests (imports + pipeline) |
+| `make test-imports` | Verify all module imports load cleanly |
+| `make test-pipeline` | Phase 3–5 integration audit (13 checks) |
+
+### Lint & format
+
+| Command | What it does |
+|---|---|
+| `make lint` | Lint with ruff |
+| `make format` | Format with black (in-place) |
+| `make check` | lint + format-check (CI gate) |
+
+### Database
+
+| Command | What it does |
+|---|---|
+| `make db-init` | Create all SQLite tables — idempotent, safe to re-run |
+| `make db-reset` | Drop + recreate all DBs — **irreversible, prompts for confirmation** |
+
+### Ollama
+
+| Command | What it does |
+|---|---|
+| `make ollama-check` | Check Ollama is running and list installed models |
+| `make ollama-list` | List models via the `ollama` CLI |
+| `make ollama-pull MODEL=llama3.1:8b` | Pull a specific model |
+
+### Phase 5 — learning *(server must be running)*
+
+| Command | What it does |
+|---|---|
+| `make refine` | Trigger a strategy refinement cycle |
+| `make generate-tool CAP="read RSS feeds"` | Generate a new tool stub for a capability |
+| `make pull-model MODEL=llama3.1:8b` | Pull a model via the JANOS API |
+
+### Logs
+
+| Command | What it does |
+|---|---|
+| `make logs-view` | Last 50 lines of the daemon log |
+| `make logs-tail` | Live-tail the daemon log (Ctrl+C to stop) |
+
+### Cleanup
+
+| Command | What it does |
+|---|---|
+| `make clean` | Remove `__pycache__` and `.pyc` files |
+| `make clean-logs` | Clear daemon log content (keeps the file) |
+| `make clean-all` | Cache + logs cleanup (keeps databases) |
+| `make clean-memory` | Reset all SQLite DBs — **irreversible** |
+
+### Docs
+
+| Command | What it does |
+|---|---|
+| `make docs` | View `ARCHITECTURE.md` in terminal pager |
 
 ---
 
@@ -199,33 +263,85 @@ Edit `config.yaml` before starting:
 settings:
   auto_voice: true          # JAN speaks every response via Edge TTS
   wake_word: true           # always-listening "Hey JAN" (needs pyaudio)
-  ar_server: false          # AR WebSocket server (enable for phone/VR use)
-  camera_watch: false       # auto-detect faces via webcam on startup
+  ar_server: false          # AR WebSocket server
   default_city: Islamabad   # default location for weather
   orchestrator: v2          # v2 = agent-based (recommended) | v1 = single-shot
 
 models:
-  llm: "<your-big-model>"           # big model (complex reasoning)
-  router: "<your-main-model>"       # agent routing + most tasks
-  coder: "<your-coder-model>"       # coding / self-improvement agents
+  llm: "qwen2.5:7b-instruct"       # main model for most agents
+  router: "qwen2.5:7b-instruct"    # intent classification
+  coder: "qwen2.5-coder:7b"        # coding + self-improvement agents
 
-# Per-agent model overrides (defaults to models.router)
+# Per-agent model overrides
 agents:
+  max_steps: 15                     # default max steps per agent run
   models:
-    chat: "<your-chat-model>"
-    coding: "<your-coder-model>"
-    # ... override any agent's model here
+    coding: "qwen2.5-coder:7b"
+    # override any agent's model here
 
 learning:
   auto_start: true          # start background RAG learning on boot
   session_duration: 30      # minutes per learning session
   interval_hours: 6         # hours between sessions
-  topics:                   # custom topics to research automatically
-    - "latest AI news and developments"
-    - "Pakistan current events"
 ```
 
 Toggle any module on/off under `features:` without touching code.
+
+---
+
+## How Key Features Work
+
+### Spotify
+
+JAN controls the **installed Spotify desktop app** — never the web browser.
+
+Control chain (tries each in order until one works):
+
+1. **`playerctl`** — cleanest MPRIS2 interface (`sudo apt install playerctl`)
+2. **`dbus-send`** — D-Bus MPRIS2, zero extra install (built into every D-Bus desktop)
+3. **`xdotool`** — keyboard injection into the app window (`sudo apt install xdotool`)
+4. **`spotify:search:QUERY` URI** — `xdg-open` opens search directly inside the app
+
+For search specifically: starts Spotify if not running → focuses the window → types into search bar via xdotool, or falls back to opening `spotify:search:QUERY` URI which the app handles natively.
+
+```
+"play Blinding Lights on Spotify"
+  → media agent → spotify.search_and_play("Blinding Lights")
+    → open app → xdotool type → Enter
+    OR → xdg-open spotify:search:Blinding+Lights
+```
+
+### Email
+
+JAN opens your real browser (Chrome/Firefox where you're already logged in):
+
+```
+"email John about the meeting tomorrow"
+  → communication agent
+    → builds: https://mail.google.com/mail/?view=cm&fs=1&to=john@...&su=Meeting+Tomorrow&body=Hi+John%2C...
+    → system_control.open_url → opens in YOUR browser (you're logged in)
+    → waits 2s
+    → keyboard_mouse Ctrl+Enter → sent
+```
+
+No Playwright, no login prompt. Falls back to `mailto:` URI for non-Gmail setups.
+
+### Terminal / System Access
+
+The system agent has full shell access via `system_control.run_shell`:
+
+```
+"is Spotify installed?"
+  → system agent → run_shell: "which spotify || snap list | grep spotify"
+  → returns: "/snap/bin/spotify"
+  → "Yes, Spotify is installed at /snap/bin/spotify"
+
+"what's eating my CPU?"
+  → system agent → run_shell: "ps aux --sort=-%cpu | head -10"
+  → returns: top processes table
+```
+
+At startup, JAN probes the system (installed tools, GPU, package managers) and saves findings to long-term memory so future responses are aware of your setup.
 
 ---
 
@@ -244,7 +360,7 @@ Base URL: `http://localhost:8000`
 ```bash
 curl -X POST http://localhost:8000/chat \
   -H "Content-Type: application/json" \
-  -d '{"message": "What is the weather in Islamabad?"}'
+  -d '{"message": "Play Bohemian Rhapsody on Spotify"}'
 ```
 
 ### Agents
@@ -253,18 +369,18 @@ curl -X POST http://localhost:8000/chat \
 |---|---|---|
 | GET | `/agents` | List all agents + their tools and config |
 | POST | `/agents/run` | Run a specific agent with a task |
-| POST | `/agents/classify` | Classify which agent would handle a message |
+| POST | `/agents/classify` | Preview which agent handles a message |
 
 ```bash
 # Run a specific agent
 curl -X POST http://localhost:8000/agents/run \
   -H "Content-Type: application/json" \
-  -d '{"agent": "research", "task": "What is quantum computing?"}'
+  -d '{"agent": "system", "task": "What GPU does this machine have?"}'
 
-# Preview routing without executing
+# Preview routing
 curl -X POST http://localhost:8000/agents/classify \
   -H "Content-Type: application/json" \
-  -d '{"message": "Play something on Spotify"}'
+  -d '{"message": "Send an email to john about the project"}'
 ```
 
 ### Learning Engine
@@ -276,7 +392,7 @@ curl -X POST http://localhost:8000/agents/classify \
 | POST | `/learning/explore` | Research a specific topic into RAG |
 | POST | `/learning/ingest` | Add a URL to the knowledge base |
 | POST | `/learning/search` | Semantic search across RAG |
-| GET | `/learning/skills` | View learned skill patterns ("what works") |
+| GET | `/learning/skills` | View learned skill patterns |
 
 ### System
 
@@ -284,7 +400,7 @@ curl -X POST http://localhost:8000/agents/classify \
 |---|---|---|
 | GET | `/health` | Full system health — modules, agents, services |
 | GET | `/modules` | List enabled/available modules |
-| POST | `/process` | Call any module directly |
+| POST | `/process` | Call any module directly by name |
 | POST | `/voice/toggle` | Toggle auto-voice on/off |
 | GET | `/daemon/status` | Background daemon status |
 
@@ -303,14 +419,14 @@ curl -X POST http://localhost:8000/agents/classify \
 | tts | ✅ | Legacy pyttsx3 fallback |
 | smart_tts | ✅ | Edge TTS — natural Urdu + English voices |
 | speaker | ✅ | Speaker audio output |
-| app_launcher | ✅ | Open / close any application |
-| keyboard_mouse | ✅ | Type, click, hotkeys, pyautogui |
-| file_manager | ✅ | File/folder CRUD and search |
-| system_control | ⚠️ | Volume (needs pycaw), clipboard, lock, shutdown |
-| browser | ✅ | Browser automation (webbrowser fallback) |
+| app_launcher | ✅ | Open / close / focus any application |
+| keyboard_mouse | ✅ | Type, click, hotkeys via pyautogui |
+| file_manager | ✅ | File/folder CRUD, search, run shell commands |
+| system_control | ✅ | Volume, clipboard, lock, shutdown, **run any shell command** |
+| browser | ✅ | Browser automation via Playwright (webbrowser fallback) |
 | web_search | ✅ | DuckDuckGo scraping + LLM summary |
-| youtube | ✅ | Search and open YouTube videos |
-| spotify | ✅ | Search + play via pyautogui keyboard |
+| youtube | ✅ | Search and play YouTube videos |
+| spotify | ✅ | **Desktop app control** via D-Bus MPRIS2 / xdotool / spotify: URI |
 | memory | ✅ | SQLite + ChromaDB long-term memory |
 | research_agent | ✅ | Multi-step web research |
 | module_generator | ⚠️ | Self-writes and hot-loads new Python modules |
@@ -324,7 +440,7 @@ curl -X POST http://localhost:8000/agents/classify \
 | screen_reader | ✅ | Screenshot + OCR via pytesseract |
 | learning_engine | ✅ | RAG pipeline + skill memory + overnight learning |
 
-⚠️ = works but requires optional deps or hardware (camera, microphone, pycaw)
+⚠️ = works but requires optional deps or hardware (camera, microphone, Playwright)
 
 ---
 
@@ -334,6 +450,12 @@ curl -X POST http://localhost:8000/agents/classify \
 memory/
 ├── jarvis_memory.db      # SQLite: conversations, knowledge, user preferences
 ├── chroma_db/            # ChromaDB vector store (semantic search)
+├── chroma_episodic/      # Episodic memory (recent events)
+├── episodic.db           # Episodic memory SQLite
+├── long_term.db          # Long-term fact storage
+├── routing.db            # Agent routing history + scores
+├── scoring.db            # Task scoring records
+├── privilege_audit.jsonl # All shell commands run (audit trail)
 ├── notes.json            # User notes
 ├── audio/tts/            # Edge TTS output
 ├── vision/captures/      # Webcam captures
@@ -350,10 +472,11 @@ The memory module uses `all-MiniLM-L6-v2` (~79 MB, auto-downloaded on first run)
 
 JAN builds a knowledge base automatically:
 
-1. **Skill memory** — records every tool call outcome (agent / tool / input / success / error) and builds "what works" tips injected into future agent prompts
-2. **RAG pipeline** — web search → read page → chunk (500 words, 50-word overlap) → MD5 dedup → ChromaDB vectors
-3. **Knowledge explorer** — picks topics, searches the web, ingests into RAG on a configurable schedule
-4. **Overnight sessions** — analyze past failures, explore new topics, extract user preferences
+1. **Startup probe** — on every boot, scans for installed tools (playerctl, xdotool, GPU, snap/flatpak apps) and saves to memory so agents know what's available
+2. **Skill memory** — records every tool call outcome (agent / tool / input / success / error) and builds "what works" tips injected into future agent prompts
+3. **RAG pipeline** — web search → read page → chunk (500 words, 50-word overlap) → MD5 dedup → ChromaDB vectors
+4. **Knowledge explorer** — picks topics, searches the web, ingests into RAG on a configurable schedule
+5. **Overnight sessions** — analyze past failures, explore new topics, extract user preferences
 
 Configure under `learning:` in `config.yaml`. Disable with `auto_start: false`.
 
@@ -385,43 +508,54 @@ Then open `ar_client/index.html` on your phone and enter your PC's local IP.
 |---|---|
 | API server | FastAPI + Uvicorn |
 | LLM inference | Ollama (fully local, no cloud) |
-| Models | Bring your own — set in config.yaml |
 | STT | OpenAI Whisper |
 | TTS | Microsoft Edge TTS (edge-tts) |
 | Vector memory | ChromaDB + sentence-transformers (all-MiniLM-L6-v2) |
 | Relational memory | SQLite |
-| PC automation | pyautogui, subprocess, os |
+| Spotify control | D-Bus MPRIS2 (`dbus-send`) + `xdg-open spotify:` URI |
+| PC automation | subprocess, wmctrl, xdotool (optional), pyautogui (optional) |
 | CV / vision | OpenCV, face_recognition |
 | OCR | pytesseract / EasyOCR |
 | Audio | sounddevice, soundfile, librosa |
 | AR transport | WebSocket (websockets) |
-| Web scraping | requests + BeautifulSoup (no Playwright needed) |
-| Packaging | PyInstaller |
+| Web scraping | requests + BeautifulSoup |
+| Browser automation | Playwright (optional, for deep web interaction) |
 
 ---
 
 ## Troubleshooting
 
-**`scipy` version conflict**
-Run `pip install -r requirements.txt` to get the right version.
+**Spotify opens in browser instead of app**
+JAN now uses D-Bus MPRIS2 — it never opens the browser for Spotify. If search isn't working, install xdotool: `sudo apt install xdotool`. For best experience install playerctl: `sudo apt install playerctl`.
 
-**`webrtcvad` fails to compile**
-It's optional — wake word detection falls back to energy-based VAD automatically.
-
-**`No module named 'chromadb'`**
-Run `pip install chromadb sentence-transformers`.
-
-**`ffplay` not found (TTS silent)**
-Install ffmpeg and ensure it's in your PATH. On Windows: `winget install ffmpeg`.
+**Email loops on email.com / doesn't compose**
+JAN now uses Gmail's compose URL (`?view=cm&fs=1`) opened in your real browser. Make sure you're logged in to Gmail in Chrome/Firefox. If `system_control.open_url` doesn't open your browser, check `xdg-open` works: `xdg-open https://google.com`.
 
 **LLM not responding**
-Ensure Ollama is running (`ollama serve`) and your model is pulled (`ollama pull <your-model>`).
+Ensure Ollama is running (`ollama serve`) and your model is pulled (`ollama pull qwen2.5:7b-instruct`).
+
+**`ffplay` not found (TTS silent)**
+Install ffmpeg: `sudo apt install ffmpeg`.
 
 **`pyautogui` fails on Linux**
-Install `python3-tk` and `python3-dev`: `sudo apt install python3-tk python3-dev`.
+Install display deps: `sudo apt install python3-tk python3-dev`. Note: Spotify and email no longer require pyautogui — only keyboard_mouse agent actions need it.
 
 **Tesseract OCR not found**
-Install tesseract-ocr system package and ensure it's in PATH.
+`sudo apt install tesseract-ocr`
+
+**`No module named 'chromadb'`**
+`pip install chromadb sentence-transformers`
+
+**`webrtcvad` fails to compile**
+Optional — wake word detection falls back to energy-based VAD automatically.
+
+**Shell commands not working in system agent**
+The system agent uses `system_control.run_shell`. Test it directly:
+```bash
+curl -X POST http://localhost:8000/process \
+  -H "Content-Type: application/json" \
+  -d '{"module": "system_control", "input": {"action": "run_shell", "command": "whoami"}}'
+```
 
 ---
 
@@ -429,22 +563,36 @@ Install tesseract-ocr system package and ensure it's in PATH.
 
 ```
 jarvis-core/
-├── main.py                    # FastAPI app — all API routes
+├── main.py                    # FastAPI app — all API routes + startup
 ├── config.yaml                # Feature toggles + model + agent settings
 ├── demo.py                    # Terminal chat (no server needed)
-├── jan_service.py             # Windows service / standalone launcher
-├── build_exe.py               # PyInstaller EXE builder
-├── setup.sh                   # Linux / macOS one-click installer
-├── install.bat                # Windows one-click installer
-├── startup.bat                # Windows Startup folder launcher
+├── Makefile                   # 40-target developer entry point
+├── setup.sh                   # One-click Linux installer
 ├── requirements.txt           # Core pip deps
 ├── requirements_full.txt      # Full dep list including optional packages
+├── core/                      # New architecture backbone
+│   ├── config.py              # Config singleton
+│   ├── llm.py / llm_client.py # Unified Ollama interface
+│   ├── memory.py              # Short + long-term memory
+│   ├── episodic_memory.py     # Episodic event store
+│   ├── hardware_monitor.py    # GPU/CPU/RAM monitoring
+│   ├── model_router.py        # Smart model routing by load
+│   ├── reasoning_pipeline.py  # Think → plan → execute → critique pipeline
+│   ├── scoring.py             # Task scoring engine
+│   └── logger.py              # Structured JSON logging
+├── agents/                    # Top-level agent framework (LangGraph / AutoGen)
+│   ├── planner.py, executor.py, reflector.py
+│   ├── crew_agents.py         # CrewAI-style multi-agent crews
+│   └── autogen_debate.py      # AutoGen debate pattern
+├── tools/                     # Pluggable tool interface
+│   ├── privileged_shell.py    # Sudo-aware shell with audit log
+│   └── *.py                   # math, time, weather, web_search, file, system, browser, media
 ├── modules/
-│   ├── __init__.py            # Module registry + dependency wiring
+│   ├── __init__.py            # Module registry + dependency wiring + startup probe
 │   ├── base.py                # ModuleBase class
-│   ├── orchestrator_module.py # v1 single-shot LLM orchestrator
-│   ├── orchestrator_v2_module.py  # v2 agent dispatcher
+│   ├── orchestrator_v2_module.py  # v2 agent dispatcher (keyword → LLM routing)
 │   ├── learning_engine.py     # RAG + skill memory + background learning
+│   ├── spotify_module.py      # D-Bus / xdotool / spotify: URI control
 │   ├── agents/                # 14 specialized agent classes
 │   └── *.py                   # 29 individual modules
 ├── frontend/
@@ -452,18 +600,20 @@ jarvis-core/
 │   ├── style.css
 │   └── app.js
 ├── ar_client/
-│   └── index.html             # Phone AR web app (no build step)
+│   └── index.html             # Phone AR web app
 ├── memory/                    # Runtime data (SQLite, ChromaDB, audio, faces)
-└── logs/                      # Development logs and planning docs
+└── logs/                      # Dev logs and session records
 ```
 
 ---
 
 ## Roadmap
 
-- [ ] End-to-end testing with live Ollama on clean machine
-- [ ] `llava` vision model integration for screen understanding
+- [ ] `llava` / vision model for real screen understanding (not just OCR)
+- [ ] `playerctl` auto-install check on startup with user prompt
 - [ ] Custom wake word training for "Hey JAN"
-- [ ] Mobile companion app (beyond AR client)
-- [ ] WhatsApp / Telegram bot integration
+- [ ] WhatsApp desktop app integration (not just Web)
+- [ ] Telegram bot integration
 - [ ] Docker deployment option
+- [ ] GPU load balancing across Ollama model calls
+- [ ] Interactive terminal session (persistent PTY, not just one-shot run_shell)

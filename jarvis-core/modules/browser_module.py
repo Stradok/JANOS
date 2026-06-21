@@ -35,7 +35,7 @@ class BrowserModule(ModuleBase):
                 self._context = self._browser.new_context(
                     viewport=None,
                     no_viewport=True,
-                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                    user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
                 )
                 self._page = self._context.new_page()
             except Exception as e:
@@ -60,12 +60,7 @@ class BrowserModule(ModuleBase):
                 webbrowser.open(url)
                 return {"status": "ok", "url": url, "title": "(opened in default browser)", "method": "webbrowser"}
             except Exception as e:
-                # Last resort: use start command
-                try:
-                    os.startfile(url)
-                    return {"status": "ok", "url": url, "title": "(opened via system)", "method": "startfile"}
-                except Exception as e2:
-                    return {"error": f"Could not open URL: {e2}"}
+                return {"error": f"Could not open URL: {e}"}
         elif err:
             return err
 
