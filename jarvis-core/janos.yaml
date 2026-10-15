@@ -1,0 +1,34 @@
+# JANOS configuration.
+#
+# Every value here can also be set as an environment variable with a JANOS_
+# prefix (JANOS_MODEL, JANOS_MAX_STEPS, ...), which always wins over this file.
+
+# --- LLM ---------------------------------------------------------------
+# One model runs the whole system: routing, planning, every agent, the
+# critic, and lesson distillation. qwen2.5:7b-instruct was chosen for this
+# machine (RTX 4060, 8 GB VRAM): it fits entirely on the GPU at ~5.5 GB and
+# follows JSON schemas reliably, which the supervisor depends on.
+#
+#   ollama pull qwen2.5:7b-instruct
+#
+# Smaller GPU? qwen2.5:3b-instruct. More VRAM? qwen2.5:14b-instruct.
+model: qwen2.5:7b-instruct
+ollama_url: http://localhost:11434
+timeout: 180
+num_ctx: 8192
+temperature: 0.15      # low on purpose: control flow is JSON, not prose
+
+# --- Supervisor --------------------------------------------------------
+max_steps: 8           # most plan steps the supervisor will run
+max_heal_attempts: 2   # retries after a failed verification
+agent_max_turns: 6     # tool-loop turns inside one agent
+min_pass_score: 0.6    # verification score needed to accept an answer
+
+# --- Memory and learning ----------------------------------------------
+recall_k: 4            # past episodes injected as context
+lesson_k: 4            # learned lessons injected as context
+learn: true            # distil lessons from episodes
+
+# --- Tools -------------------------------------------------------------
+allow_shell: true      # set false to remove shell access entirely
+shell_timeout: 30

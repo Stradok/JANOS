@@ -1,0 +1,17 @@
+# JANOS runtime dependencies — the complete list.
+#
+# Deliberately small. Retrieval is SQLite FTS5 and HTML parsing is
+# html.parser, both from the standard library, so there is no vector
+# database, no embedding model, and no scraping stack to install or break.
+# Everything else JANOS needs is the one Ollama model.
+#
+#   python3 -m venv .venv
+#   .venv/bin/pip install -r requirements-janos.txt
+#   ollama pull qwen2.5:7b-instruct
+
+httpx>=0.27         # async HTTP: Ollama API, web_search, web_fetch
+fastapi>=0.110      # HTTP API (janos.server)
+uvicorn[standard]>=0.29
+pydantic>=2.6       # request models
+psutil>=5.9         # system_info tool
+PyYAML>=6.0         # janos.yaml

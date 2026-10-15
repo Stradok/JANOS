@@ -4,6 +4,24 @@
 
 JAN is a locally-running AI assistant that runs entirely on your machine via [Ollama](https://ollama.com). It controls your Linux PC, browses the web, sends emails, plays Spotify, remembers everything, and autonomously learns new skills — no cloud APIs required.
 
+> ### ▶ Start with JANOS v2 — see **[JANOS.md](JANOS.md)**
+>
+> `janos/` is the working, text-only autonomous core: one supervisor, five
+> agents, tools that genuinely execute, persistent memory, self-healing,
+> self-learning, **tools it writes for itself**, and an **autonomous mode**
+> that picks its own goals — on a single Ollama model with six dependencies.
+>
+> ```bash
+> make janos-setup     # venv, deps, and the model
+> make janos           # interactive
+> make janos-auto      # let it work on its own
+> ```
+>
+> The rest of this README documents the older multimodal stack (`modules/`,
+> `agents/`, `core/`, `main.py`). That stack is still present but does not
+> currently run: it needs `chromadb`, `crewai`, `langgraph`, `pyautogui` and
+> `playwright`, none of which install on this machine's Python 3.14.
+
 ---
 
 ## What JAN Can Do

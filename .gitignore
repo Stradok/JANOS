@@ -1,8 +1,20 @@
 # System temp files
 temp/
 
-# Python virtual environment
+# Python virtual environments
 jarvis-core/venv/
+jarvis-core/.venv/
+
+# JANOS runtime state — regenerated, and personal
+jarvis-core/memory/*.db
+jarvis-core/memory/*.db-journal
+jarvis-core/memory/chroma_db/
+jarvis-core/memory/chroma_episodic/
+jarvis-core/workspace/
+
+# Tools JANOS wrote for itself — machine-written, rebuilt on demand
+jarvis-core/janos/generated/*.py
+!jarvis-core/janos/generated/__init__.py
 
 # Python bytecode
 __pycache__/
@@ -16,3 +28,6 @@ desktop.ini
 
 # Copilot tool output
 copilot-tool-output-*
+
+# secrets
+jarvis-core/.brave_key

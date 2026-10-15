@@ -31,6 +31,9 @@ endif
 
 .DEFAULT_GOAL := help
 .PHONY: help \
+        janos janos-setup janos-serve janos-test janos-ask \
+        janos-stats janos-lessons janos-reset janos-tools \
+        janos-auto janos-auto-night janos-auto-stop \
         setup install install-dev install-optional \
         dev prod start \
         chat chat-v1 demo open \
@@ -46,6 +49,77 @@ endif
 
 
 # ============================================================
+#  JANOS v2 — text-only autonomous core (janos/)
+#  Self-contained: its own venv, its own deps, one Ollama model.
+# ============================================================
+
+JVENV  := .venv
+JPY    := $(JVENV)/bin/python
+JMODEL := qwen2.5:7b-instruct
+
+janos-setup: ## JANOS: create .venv, install deps, pull the model
+	@echo "  Creating $(JVENV) ..."
+	@$(PYTHON) -m venv $(JVENV)
+	@$(JVENV)/bin/pip install --quiet --upgrade pip
+	@$(JVENV)/bin/pip install --quiet -r requirements-janos.txt
+	@echo "  Pulling $(JMODEL) (~4.7 GB, skipped if present) ..."
+	@ollama list 2>/dev/null | grep -q "$(JMODEL)" || ollama pull $(JMODEL)
+	@echo "  Ready. Run: make janos"
+
+janos: _janos-check ## JANOS: interactive REPL
+	@$(JPY) -m janos.cli
+
+janos-ask: _janos-check ## JANOS: one-shot question — make janos-ask Q="what is my GPU?"
+	@$(JPY) -m janos.cli $(Q)
+
+janos-serve: _janos-check ## JANOS: HTTP API on $(HOST):$(PORT)
+	@$(JVENV)/bin/uvicorn janos.server:app --host $(HOST) --port $(PORT)
+
+janos-test: _janos-check ## JANOS: self-test — add OFFLINE=1 to skip model/network
+	@$(JPY) -m janos.selftest $(if $(OFFLINE),--offline,)
+
+janos-stats: _janos-check ## JANOS: memory statistics and agent rankings
+	@$(JPY) -c "from janos.config import Config; from janos.memory import Memory; \
+	m=Memory(Config.load().db_path); s=m.stats(); \
+	print(); [print(f'  {k:<14} {v}') for k,v in s.items() if k!='tools']; \
+	print('\n  agent rankings'); \
+	[print(f\"    {r['agent']:<12} {r['task_type']:<14} {r['runs']:>3} runs  avg {r['avg_score']}\") for r in m.rankings()]; \
+	print()"
+
+janos-lessons: _janos-check ## JANOS: show everything it has learned
+	@$(JPY) -c "from janos.config import Config; from janos.memory import Memory; \
+	m=Memory(Config.load().db_path); ls=m.all_lessons(); \
+	print(); print(f'  {len(ls)} lesson(s)'); \
+	[print(f\"    [{l['task_type']}] {l['lesson']}\") for l in ls]; print()"
+
+janos-auto: _janos-check ## JANOS: autonomous mode — INTERVAL=300 CYCLES=0 (0 = unbounded)
+	@$(JPY) -m janos.auto --interval $(or $(INTERVAL),300) --cycles $(or $(CYCLES),0)
+
+janos-auto-night: _janos-check ## JANOS: run autonomously in the background, logging to workspace/
+	@nohup $(JPY) -m janos.auto --interval 300 --quiet \
+		> $(MEMORY)/../workspace/autorun.out 2>&1 & echo $$! > /tmp/janos-auto.pid
+	@echo "  Running in background (pid $$(cat /tmp/janos-auto.pid))."
+	@echo "  Watch:  tail -f workspace/autorun-$$(date +%F).md"
+	@echo "  Stop:   make janos-auto-stop"
+
+janos-auto-stop: ## JANOS: stop a background autonomous run
+	@touch workspace/STOP && echo "  STOP file created — it will finish the current cycle and exit."
+
+janos-tools: _janos-check ## JANOS: list all tools, including self-written ones
+	@$(JPY) -c "from janos.config import Config; from janos.supervisor import Supervisor; \
+	s=Supervisor(Config.load()); print(); print(s.toolbox.describe()); \
+	g=s.forge.generated_names(); \
+	print(f'\n  self-written: {\", \".join(g) if g else \"(none yet)\"}\n'); s.close()"
+
+janos-reset: ## JANOS: erase all episodes and lessons (IRREVERSIBLE)
+	@printf "  Delete all JANOS memory? [y/N] " && read a && [ "$$a" = "y" ] || exit 1
+	@rm -f $(MEMORY)/janos.db && echo "  Memory cleared."
+
+_janos-check:
+	@test -x $(JPY) || { echo "  $(JVENV) missing — run: make janos-setup"; exit 1; }
+
+
+# ============================================================
 #  HELP
 # ============================================================
 
@@ -54,7 +128,19 @@ help: ## Show this help
 	@echo "  JAN — Joint Autonomous Neural Agent"
 	@echo "  ====================================="
 	@echo ""
-	@echo "  SETUP"
+	@echo "  JANOS v2  (text-only core — start here)"
+	@printf "  %-30s %s\n" "make janos-setup"              "One-time: venv, deps, and pull the model"
+	@printf "  %-30s %s\n" "make janos"                    "Interactive REPL"
+	@printf "  %-30s %s\n" "make janos-ask Q=\"...\""        "Ask one question and exit"
+	@printf "  %-30s %s\n" "make janos-serve"              "HTTP API on port $(PORT)"
+	@printf "  %-30s %s\n" "make janos-test"               "Self-test (add OFFLINE=1 to skip the model)"
+	@printf "  %-30s %s\n" "make janos-auto"               "Autonomous mode — picks its own goals, learns"
+	@printf "  %-30s %s\n" "make janos-auto-night"         "Autonomous in the background (make janos-auto-stop)"
+	@printf "  %-30s %s\n" "make janos-stats"              "Episodes, scores and agent rankings"
+	@printf "  %-30s %s\n" "make janos-lessons"            "What JANOS has learned so far"
+	@printf "  %-30s %s\n" "make janos-tools"              "All tools, including ones it wrote itself"
+	@echo ""
+	@echo "  SETUP  (legacy multimodal stack)"
 	@printf "  %-30s %s\n" "make setup"                    "Full first-time setup (venv + deps + dirs)"
 	@printf "  %-30s %s\n" "make install"                  "Install Python dependencies"
 	@printf "  %-30s %s\n" "make install-dev"              "Install dev tools (ruff, black, pytest)"
