@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from janos import sandbox
 from janos.config import Config
 from janos.llm import LLM, LLMError
 from janos.tools import Tool, Toolbox
@@ -452,6 +453,7 @@ Output ONLY the module inside one ```python fence. No explanation."""
         )
         try:
             proc = await asyncio.create_subprocess_exec(
+                *sandbox.prefix(self.config, "isolated", network=True, extra_ro=(GENERATED,)),
                 sys.executable, "-c", driver,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
             )

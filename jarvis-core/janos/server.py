@@ -15,11 +15,15 @@ Endpoints
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
+import os
+import secrets
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -27,6 +31,34 @@ from janos.config import Config
 from janos.supervisor import Supervisor
 
 _state: dict[str, Any] = {}
+
+
+def api_token() -> str:
+    """The per-install bearer token, created on first use and readable only by you.
+
+    /chat runs agents that have shell access, so the endpoint must never be
+    reachable without proof of ownership, even from another process on this
+    machine (a web page can POST to localhost).
+    """
+    path = Config.load().memory_dir / "api_token"
+    try:
+        # Created 0600 in one step: write-then-chmod leaves a readable window,
+        # and O_EXCL stops two first requests writing different tokens.
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        path.chmod(0o600)
+    else:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(secrets.token_urlsafe(32))
+    return path.read_text(encoding="utf-8").strip()
+
+
+def require_token(authorization: str = Header(default="")) -> None:
+    supplied = authorization.removeprefix("Bearer ").strip()
+    # Compare bytes: compare_digest raises on non-ASCII str, which would be a 500.
+    if not supplied or not hmac.compare_digest(supplied.encode(), api_token().encode()):
+        raise HTTPException(401, "Missing or invalid bearer token "
+                                 "(see memory/api_token)")
 
 
 @asynccontextmanager
@@ -45,6 +77,9 @@ async def lifespan(app: FastAPI):
     else:
         print(f"  JANOS ready · {config.model} · {len(sup.runner.agents)} agents "
               f"· {len(sup.toolbox.names())} tools", flush=True)
+    api_token()
+    print(f"  API token: {config.memory_dir / 'api_token'}  "
+          f"(send as 'Authorization: Bearer <token>')", flush=True)
     try:
         yield
     finally:
@@ -52,7 +87,16 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="JANOS", version="2.0.0",
-              description="Local autonomous, self-healing agent system", lifespan=lifespan)
+              description="Local autonomous, self-healing agent system", lifespan=lifespan,
+              dependencies=[Depends(require_token)])
+
+# A page on the web can make your browser call http://localhost:8000 under a
+# hostname it controls (DNS rebinding). Only accept the names we expect.
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=[h.strip() for h in os.environ.get(
+        "JANOS_ALLOWED_HOSTS", "127.0.0.1,localhost").split(",") if h.strip()],
+)
 
 
 def sup() -> Supervisor:

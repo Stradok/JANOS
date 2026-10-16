@@ -16,6 +16,8 @@ PY       := $(BIN)/python
 PIP      := $(BIN)/pip
 UVICORN  := $(BIN)/uvicorn
 HOST     := 0.0.0.0
+# JANOS agents have shell access: loopback only unless you override JANOS_HOST.
+JANOS_HOST ?= 127.0.0.1
 PORT     := 8000
 MEMORY   := memory
 
@@ -73,7 +75,7 @@ janos-ask: _janos-check ## JANOS: one-shot question — make janos-ask Q="what i
 	@$(JPY) -m janos.cli $(Q)
 
 janos-serve: _janos-check ## JANOS: HTTP API on $(HOST):$(PORT)
-	@$(JVENV)/bin/uvicorn janos.server:app --host $(HOST) --port $(PORT)
+	@$(JVENV)/bin/uvicorn janos.server:app --host $(JANOS_HOST) --port $(PORT)
 
 janos-test: _janos-check ## JANOS: self-test — add OFFLINE=1 to skip model/network
 	@$(JPY) -m janos.selftest $(if $(OFFLINE),--offline,)
@@ -199,7 +201,7 @@ help: ## Show this help
 	@printf "  %-30s %s\n" "make clean-all"                "cache + logs cleanup (keeps DBs)"
 	@echo ""
 	@echo "  DOCS"
-	@printf "  %-30s %s\n" "make docs"                     "View ARCHITECTURE.md in terminal pager"
+	@printf "  %-30s %s\n" "make docs"                     "View docs/ARCHITECTURE.md in terminal pager"
 	@echo ""
 
 
@@ -436,5 +438,5 @@ clean-all: clean clean-logs ## Remove caches and clear logs (keeps databases)
 #  DOCS
 # ============================================================
 
-docs: ## View ARCHITECTURE.md in terminal pager
-	@less ARCHITECTURE.md 2>/dev/null || more ARCHITECTURE.md 2>/dev/null || cat ARCHITECTURE.md
+docs: ## View docs/ARCHITECTURE.md in terminal pager
+	@less ../docs/ARCHITECTURE.md 2>/dev/null || more ../docs/ARCHITECTURE.md 2>/dev/null || cat ../docs/ARCHITECTURE.md

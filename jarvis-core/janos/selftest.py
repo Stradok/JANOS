@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import re
 import os
 import shutil
 import sys
@@ -357,6 +358,65 @@ async def test_pipeline(sup: Supervisor) -> None:
     check("memory accumulated episodes", stats["episodes"] >= 2, str(stats))
 
 
+async def test_sandbox() -> None:
+    print("\n\033[1mSandbox\033[0m")
+    from pathlib import Path
+    from janos import sandbox
+    from janos.tools import Toolbox
+    cfg = Config.load()
+    if not sandbox.available():
+        check("bubblewrap available", False, "install bubblewrap; tools are running unsandboxed")
+        return
+    check("bubblewrap available", True)
+    tb = Toolbox(cfg)
+    home = Path.home()
+    secret = home / ".claude"            # known to exist on the host
+    # Read only the last line: the echoed command itself contains both words.
+    r = await tb.run("shell", {"command": f"test -e {secret} && echo VISIBLE || echo HIDDEN"})
+    last = r.output.strip().splitlines()[-1]
+    check("shell cannot see home folder", last == "HIDDEN" and secret.exists(), last)
+    r = await tb.run("shell", {"command": "touch /usr/janos_probe 2>&1; echo done"})
+    check("shell cannot write outside workspace", "Read-only" in r.output, r.output[-80:])
+    r = await tb.run("shell", {"command": "echo ok > sandbox_probe.txt && cat sandbox_probe.txt && rm sandbox_probe.txt"})
+    check("shell can write in workspace", r.output.strip().endswith("ok"), r.output[-60:])
+    r = await tb.run("shell", {"command": "ps -e --no-headers | wc -l"})
+    procs = int((re.findall(r"\d+", r.output.split(")")[-1]) or ["0"])[-1])
+    check("shell still sees the machine", procs > 10, f"{procs} processes")
+    os.environ["JANOS_SELFTEST_SECRET"] = "leak-me"
+    r = await tb.run("shell", {"command": "env | grep -c JANOS_SELFTEST_SECRET"})
+    os.environ.pop("JANOS_SELFTEST_SECRET", None)
+    check("shell gets no host environment", r.output.strip().splitlines()[-1] == "0", r.output[-40:])
+    r = await tb.run("shell", {"command":
+        "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus systemd-run --user --pipe true "
+        ">/dev/null 2>&1 && echo ESCAPED || echo CONTAINED"})
+    check("shell cannot escape via the session bus",
+          r.output.strip().splitlines()[-1] == "CONTAINED", r.output[-60:])
+    # Host processes are visible (ps works) but their root, cwd and environ must
+    # not be: /proc/<pid>/root would otherwise reach the real home folder.
+    me = os.getpid()
+    r = await tb.run("shell", {"command":
+        f"ls /proc/{me}/root/ >/dev/null 2>&1 && echo OP''EN:root; "
+        f"ls /proc/{me}/cwd/ >/dev/null 2>&1 && echo OP''EN:cwd; "
+        f"cat /proc/{me}/environ >/dev/null 2>&1 && echo OP''EN:environ; echo E''ND"})   # split markers: the command is echoed back
+    check("shell cannot reach host processes via /proc",
+          "OPEN:" not in r.output and r.output.strip().endswith("END"), r.output.splitlines()[-1])
+    probe = Path("/dev/shm/janos_selftest_probe")
+    await tb.run("shell", {"command": f"touch {probe}"})
+    check("shell /dev/shm is private", not probe.exists())
+    probe.unlink(missing_ok=True)
+    r = await tb.run("shell", {"command": "timeout 5 bash -c 'echo > /dev/tcp/1.1.1.1/443' 2>/dev/null && echo NET || echo NONET"})
+    check("shell has no network by default", r.output.strip().splitlines()[-1] == "NONET", r.output[-40:])
+    r = await tb.run("run_python", {"code": (
+        "import socket\n"
+        "try:\n    socket.create_connection(('1.1.1.1', 443), timeout=3); print('NET OPEN')\n"
+        "except OSError:\n    print('NET BLOCKED')\n"
+        f"import os; print('SECRET', os.path.exists({str(secret)!r}))\n"
+        "import httpx; print('PKG OK')")})
+    check("run_python has no network", "NET BLOCKED" in r.output, r.output)
+    check("run_python cannot see home folder", "SECRET False" in r.output, r.output)
+    check("run_python can import venv packages", "PKG OK" in r.output, r.output)
+
+
 async def test_playbooks() -> None:
     print("\n\033[1mPlaybooks\033[0m")
     from janos.playbooks import PlaybookForge, validate
@@ -379,6 +439,34 @@ async def test_playbooks() -> None:
     check("playbook chains steps", out.strip() == "2+2 = 4 | 3*3 = 9", out)
 
 
+def test_server_security() -> None:
+    print("\n\033[1mServer security\033[0m")
+    import tempfile
+    saved = os.environ.get("JANOS_MEMORY_DIR")
+    os.environ["JANOS_MEMORY_DIR"] = tempfile.mkdtemp()
+    from fastapi.testclient import TestClient
+    from janos.server import api_token, app
+    tok = api_token()
+    c = TestClient(app, base_url="http://127.0.0.1")   # no lifespan: no model needed
+    check("token file is owner-only",
+          oct((Config.load().memory_dir / "api_token").stat().st_mode & 0o777) == "0o600")
+    check("/chat refuses no token", c.post("/chat", json={"input": "hi"}).status_code == 401)
+    check("/chat refuses wrong token",
+          c.post("/chat", json={"input": "hi"}, headers={"Authorization": "Bearer nope"}).status_code == 401)
+    check("every route refuses no token",
+          all(c.get(p).status_code == 401 for p in ("/", "/health", "/tools", "/memory/recent")))
+    ok = c.get("/tools", headers={"Authorization": f"Bearer {tok}"})
+    check("valid token passes auth", ok.status_code != 401, str(ok.status_code))
+    bad = c.get("/tools", headers={"Authorization": b"Bearer t\xc3\xb6ken"})  # raw bytes, as a hostile client sends
+    check("non-ASCII token gives 401, not 500", bad.status_code == 401, str(bad.status_code))
+    check("rebinding host rejected",
+          c.get("/health", headers={"Host": "evil.example", "Authorization": f"Bearer {tok}"}).status_code == 400)
+    if saved is None:
+        os.environ.pop("JANOS_MEMORY_DIR", None)
+    else:
+        os.environ["JANOS_MEMORY_DIR"] = saved
+
+
 async def main_async() -> int:
     ap = argparse.ArgumentParser(description="JANOS self-test")
     ap.add_argument("--offline", action="store_true", help="skip Ollama and network checks")
@@ -391,8 +479,10 @@ async def main_async() -> int:
     test_arithmetic()
     test_capability_guard()
     test_forge_validation()
+    test_server_security()
     test_autonomy()
     await test_tools()
+    await test_sandbox()
     await test_playbooks()
 
     if not args.offline:

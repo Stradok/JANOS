@@ -33,6 +33,7 @@ from urllib.parse import parse_qs, quote_plus, urlparse
 
 import httpx
 
+from janos import sandbox
 from janos.config import Config
 
 MAX_OUT = 4000  # tool results are truncated before they reach the context
@@ -486,7 +487,7 @@ class Toolbox:
                 return "Error: code is required."
             try:
                 proc = await asyncio.create_subprocess_exec(
-                    sys.executable, "-c", textwrap.dedent(code),
+                    *sandbox.prefix(cfg, "isolated"), sys.executable, "-c", textwrap.dedent(code),
                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
                     cwd=str(cfg.workspace),
                 )
@@ -515,13 +516,12 @@ class Toolbox:
                 command = re.sub(r"(^|[|;&]\s*)sudo\b", r"\1sudo -n", command)
             limit = timeout or cfg.shell_timeout
             try:
-                proc = await asyncio.create_subprocess_shell(
-                    command,
+                # Models reach for bash-isms (echo -e, [[ ]], pipefail);
+                # /bin/sh would emit them literally instead of running them.
+                proc = await asyncio.create_subprocess_exec(
+                    *sandbox.prefix(cfg, "observe"), shutil.which("bash") or "/bin/sh", "-c", command,
                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
                     cwd=str(cfg.workspace),
-                    # Models reach for bash-isms (echo -e, [[ ]], pipefail);
-                    # /bin/sh would emit them literally instead of running them.
-                    executable=shutil.which("bash") or None,
                 )
                 out, _ = await asyncio.wait_for(proc.communicate(), timeout=limit)
             except asyncio.TimeoutError:
@@ -642,9 +642,9 @@ class Toolbox:
              {"path": "str='.'"}, list_dir, False),
             ("calculate", "Evaluate an arithmetic expression exactly.",
              {"expression": "str"}, calculate, False),
-            ("run_python", "Run a short Python script and capture its stdout.",
+            ("run_python", "Run a short Python script and capture its stdout. Sandboxed: no network, only the workspace is visible.",
              {"code": "str", "timeout": "int=20"}, run_python, True),
-            ("shell", "Run a shell command on this Linux machine.",
+            ("shell", "Run a shell command on this Linux machine. Sandboxed: processes, disks and GPU are visible; only the workspace is writable; home folder hidden; no network (use web_search / web_fetch).",
              {"command": "str", "timeout": "int"}, shell, True),
             ("now", "Get the current local date and time.",
              {"fmt": "str (optional strftime)"}, now, False),

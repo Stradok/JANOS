@@ -59,6 +59,8 @@ class Config:
 
     # --- Tools ---
     allow_shell: bool = True
+    sandbox: bool = True        # run shell / run_python / smoke tests inside bubblewrap
+    shell_network: bool = False # let the sandboxed shell reach the network and localhost
     shell_timeout: int = 30
     workspace: Path = field(default_factory=lambda: ROOT / "workspace")
 
@@ -74,7 +76,7 @@ class Config:
             setattr(self, f, _env(f, getattr(self, f)))
         for f in ("temperature", "min_pass_score"):
             setattr(self, f, _env(f, getattr(self, f)))
-        for f in ("learn", "allow_shell"):
+        for f in ("learn", "allow_shell", "sandbox", "shell_network"):
             setattr(self, f, _env(f, getattr(self, f)))
 
         key = os.environ.get("JANOS_BRAVE_API_KEY") or os.environ.get("BRAVE_API_KEY") or ""

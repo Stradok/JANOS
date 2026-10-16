@@ -28,6 +28,7 @@ from typing import Any, Callable
 
 from janos.agents import Agent, AgentRunner, DEFAULT_AGENTS
 from janos.config import Config
+from janos import sandbox
 from janos.forge import ToolForge
 from janos.playbooks import PlaybookForge
 from janos.llm import LLM, LLMError
@@ -300,6 +301,7 @@ class Supervisor:
             "self_written_tools": self.forge.generated_names(),
             "playbooks": self.playbooks.names(),
             "memory": self.memory.stats(),
+            "sandbox": sandbox.describe(self.config),
             "config": {"model": self.config.model, "max_steps": self.config.max_steps,
                        "max_heal_attempts": self.config.max_heal_attempts},
         }

@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any
 
 from janos.config import Config
-from janos.forge import _looks_like_failure
+from janos.forge import _looks_like_failure, _urls_in
 from janos.llm import LLM, LLMError
 from janos.tools import Tool, Toolbox
 
@@ -46,7 +46,6 @@ PLAYBOOKS = Path(__file__).resolve().parent / "playbooks"
 FORBIDDEN_STEP_TOOLS = {"shell", "run_python", "create_tool", "create_playbook", "write_file"}
 
 _PLACEHOLDER = re.compile(r"\{\{\s*([a-zA-Z_][\w]*)(?:\.(url|line))?\s*\}\}")
-_URL = re.compile(r"https?://[^\s<>\"'\]\)]+")
 MAX_STEPS = 6
 
 PLAYBOOK_SCHEMA: dict[str, Any] = {
@@ -168,7 +167,7 @@ def _render(template: str, values: dict[str, str]) -> str:
         ref, field = m.group(1), m.group(2)
         val = values.get(ref, "")
         if field == "url":
-            found = _URL.findall(val)
+            found = _urls_in(val)
             return found[0].rstrip(".,);") if found else ""
         if field == "line":
             return next((l.strip() for l in val.splitlines() if l.strip()), "")
@@ -253,8 +252,7 @@ class PlaybookForge:
             for k, raw in step.get("args", {}).items():
                 if not args[k].strip() and _PLACEHOLDER.search(str(raw)):
                     return (f"Playbook {pb['name']} failed at step {i}: {raw!r} rendered empty "
-                            f"(params: {values.get('params_dbg', '')}"
-                            f"{ {p: values.get(p) for p in pb['params']} })")
+                            f"(params: { {p: values.get(p) for p in pb['params']} })")
             args = self._coerce(step["tool"], args)
             res = await self.toolbox.run(step["tool"], args)
             if not res.ok or _looks_like_failure(res.output):

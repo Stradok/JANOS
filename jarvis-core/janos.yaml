@@ -31,4 +31,6 @@ learn: true            # distil lessons from episodes
 
 # --- Tools -------------------------------------------------------------
 allow_shell: true      # set false to remove shell access entirely
+sandbox: true          # shell / run_python / smoke tests run inside bubblewrap
+shell_network: false   # true lets the shell reach the network and local services
 shell_timeout: 30
