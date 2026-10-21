@@ -37,6 +37,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from janos.config import Config
+from janos import persona as personas
 from janos.policy import reward
 from janos.supervisor import Supervisor
 
@@ -88,6 +89,7 @@ async def lifespan(app: FastAPI):
         print(f"  JANOS ready · {config.model} · {len(sup.runner.agents)} agents "
               f"· {len(sup.toolbox.names())} tools", flush=True)
     api_token()
+    _state["persona"] = config.persona
     print(f"  API token: {config.memory_dir / 'api_token'}  "
           f"(send as 'Authorization: Bearer <token>')", flush=True)
     try:
@@ -122,6 +124,11 @@ class ChatIn(BaseModel):
 
 class SpeakIn(BaseModel):
     text: str = Field(..., min_length=1, max_length=1000)
+    persona: str = ""
+
+
+class PersonaIn(BaseModel):
+    persona: str
 
 
 class FeedbackIn(BaseModel):
@@ -137,7 +144,7 @@ async def root() -> dict[str, Any]:
         "version": "2.0.0",
         "description": "Local autonomous, self-healing agent system with one supervisor",
         "endpoints": ["/health", "/chat", "/chat/stream", "/feedback", "/agents",
-                      "/tools", "/memory/stats", "/memory/recent", "/memory/lessons",
+                      "/tools", "/persona", "/memory/stats", "/memory/recent", "/memory/lessons",
                       "/rankings", "/telemetry", "/speak", "/login-code", "/ui/"],
     }
 
@@ -222,14 +229,14 @@ def _tts():
         from kokoro_onnx import Kokoro
         _state["tts"] = Kokoro(str(models / "kokoro-v1.0.int8.onnx"),
                                str(models / "voices-v1.0.bin"))
-        _state["voice"] = config.voice_name
-    return _state["tts"], _state["voice"]
+    return _state["tts"]
 
 
-def _wav(text: str) -> bytes:
+def _wav(text: str, persona_name: str = "") -> bytes:
     import numpy as np
-    tts, voice = _tts()
-    audio, sr = tts.create(text, voice=voice, speed=1.0, lang="en-gb")
+    tts = _tts()
+    p = personas.get(persona_name or _state.get("persona"))
+    audio, sr = tts.create(text, voice=p.voice, speed=p.speed, lang="en-gb")
     pcm = (np.clip(audio, -1, 1) * 32767).astype("<i2")
     buf = io.BytesIO()
     with wave.open(buf, "wb") as w:
@@ -243,10 +250,24 @@ def _wav(text: str) -> bytes:
 @app.post("/speak")
 async def speak(body: SpeakIn) -> Response:
     try:
-        data = await asyncio.to_thread(_wav, body.text)
+        data = await asyncio.to_thread(_wav, body.text, body.persona or "")
     except (ImportError, FileNotFoundError, ValueError, OSError) as e:
         raise HTTPException(503, f"Speech unavailable (run `make janos-voice-setup`): {e}")
     return Response(data, media_type="audio/wav")
+
+
+@app.get("/persona")
+async def get_persona() -> dict[str, Any]:
+    active = personas.get(_state.get("persona"))
+    return {"active": active.name,
+            "available": [{"name": p.name, "label": p.label} for p in personas.PERSONAS.values()]}
+
+
+@app.post("/persona")
+async def set_persona(body: PersonaIn) -> dict[str, Any]:
+    p = personas.get(body.persona)
+    _state["persona"] = p.name
+    return {"active": p.name, "label": p.label}
 
 
 @app.post("/chat")

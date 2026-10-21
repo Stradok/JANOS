@@ -25,6 +25,7 @@ from pathlib import Path
 import numpy as np
 
 from janos.config import Config
+from janos import persona as personas
 
 SR = 16000          # wake word, VAD and Whisper all expect 16 kHz mono
 FRAME = 1280        # 80 ms, the chunk size openWakeWord is trained on
@@ -83,6 +84,7 @@ class Voice:
         os.environ.setdefault("HF_HOME", str(self.models / "hf"))
         self._sup = None
 
+        self.persona = personas.get(self.config.persona)
         from kokoro_onnx import Kokoro
         self.tts = Kokoro(str(self.models / "kokoro-v1.0.int8.onnx"),
                           str(self.models / "voices-v1.0.bin"))
@@ -93,7 +95,7 @@ class Voice:
     # ------------------------------------------------------------- speech
 
     def synth(self, text: str) -> tuple[np.ndarray, int]:
-        return self.tts.create(text, voice=self.config.voice_name, speed=1.0, lang="en-gb")
+        return self.tts.create(text, voice=self.persona.voice, speed=self.persona.speed, lang="en-gb")
 
     def transcribe(self, audio16: np.ndarray) -> str:
         segments, _ = self.stt.transcribe(audio16, language="en", beam_size=1,
@@ -125,7 +127,7 @@ class Voice:
             return _plain(turn.answer)
         try:
             spoken = await self.sup.llm.chat([
-                {"role": "system", "content": self.config.persona},
+                {"role": "system", "content": self.persona.system},
                 {"role": "user", "content":
                     f"The user said: {heard}\n\nYour full answer was:\n{turn.answer}\n\n"
                     "Say this aloud in at most three short sentences. No markdown, lists, "

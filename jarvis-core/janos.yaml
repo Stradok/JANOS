@@ -45,12 +45,12 @@ employee_cli: ""       # empty = auto-detect the OpenCode binary
 employee_model: opencode/deepseek-v4.1-flash-free
 employee_timeout: 900  # seconds allowed for the coding step
 
-# --- Voice (make janos-voice) ------------------------------------------
+# --- Voice & persona (make janos-voice) --------------------------------
 # Wake word "hey jarvis" -> speech-to-text -> JANOS -> spoken reply. Local, English.
-voice_name: bm_george  # Kokoro voices: bm_george, bm_lewis (British), am_adam, af_heart (US)
+# persona picks voice, pace and manner (janos/persona.py):
+#   jarvis  refined British aide, asks when unsure, even pace
+#   ultron  cold, poetic, decisive, slower and lower
+# Personas change delivery only; facts, tools and safety guards are identical.
+persona: jarvis
 wake_threshold: 0.5    # raise if it wakes by itself, lower if it misses you
-persona: >-
-  You are JANOS, a calm, capable personal AI in the spirit of JARVIS.
-  Speak concisely, with understated dry wit. Address the user as 'sir'
-  only occasionally. Never invent facts; say plainly when you do not know.
 shell_timeout: 30

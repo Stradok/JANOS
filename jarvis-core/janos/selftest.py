@@ -735,6 +735,48 @@ async def test_worker_sandbox() -> None:
           f"observe={observe} worker={worker}")
 
 
+async def test_persona_and_launcher() -> None:
+    section("Personas & launcher")
+    from janos import persona
+    j, u = persona.get("jarvis"), persona.get("ultron")
+    check("two personas with distinct voices and manner",
+          j.name == "jarvis" and u.name == "ultron" and j.voice != u.voice
+          and j.asks and not u.asks and u.speed < j.speed, f"{j.voice}/{u.voice}")
+    check("unknown persona falls back to jarvis", persona.get("nope").name == "jarvis")
+    # Ultron must stay factual despite its free manner.
+    for p in (j, u):
+        check(f"{p.name} prompt forbids inventing facts",
+              "exactly as given" in p.system and "never claim" in p.system.lower())
+
+    # launch_ui writes an owner-only page and never the token in it
+    import importlib.util, io, contextlib, tempfile
+    from pathlib import Path as _P
+    mem = _P(tempfile.mkdtemp()); (mem / "api_token").write_text("TESTTOKEN123")
+    code_box = {}
+    import janos.launch_ui as L
+    def fake_post(url, headers=None, timeout=None):
+        code_box["auth"] = headers["Authorization"]
+        class R:
+            def raise_for_status(self): pass
+            def json(self): return {"code": "ONECODE"}
+        return R()
+    orig = L.httpx.post; L.httpx.post = fake_post
+    try:
+        buf = io.StringIO()
+        import sys as _s; old_argv = _s.argv; _s.argv = ["launch_ui", str(mem), "8000"]
+        with contextlib.redirect_stdout(buf):
+            L.main()
+        _s.argv = old_argv
+    finally:
+        L.httpx.post = orig
+    launch = mem / "launch.html"
+    mode = oct(launch.stat().st_mode & 0o777)
+    body = launch.read_text()
+    check("launcher page is owner-only and carries the code not the token",
+          mode == "0o600" and "ONECODE" in body and "TESTTOKEN123" not in body, mode)
+    shutil.rmtree(mem, ignore_errors=True)
+
+
 async def test_employee_offline() -> None:
     import dataclasses
     import subprocess
@@ -818,6 +860,7 @@ async def main_async() -> int:
     await test_employee_offline()
     await test_employee_git_hijack()
     await test_worker_sandbox()
+    await test_persona_and_launcher()
 
     if not args.offline:
         await test_network()

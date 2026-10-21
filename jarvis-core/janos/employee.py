@@ -110,7 +110,7 @@ async def _repo_is_safe(repo: Path) -> str:
     code, out = await _exec([*_GIT_SAFE, "-C", str(repo), "config", "--list",
                              "--show-origin"], 15, env=_GIT_ENV)
     if code:
-        return ""   # not listable (fresh repo): nothing dangerous to find
+        return f"cannot read repo config (exit {code}); refusing"   # fail closed
     for line in out.splitlines():
         origin, _, rest = line.partition("\t")
         # Only the repo's own config files are untrusted; skip our own
@@ -138,6 +138,22 @@ class Employee:
             return str(SNAP_BIN)
         return shutil.which("opencode")
 
+    def _sbx_git(self, cwd: Path, *args: str, timeout: float = 120):
+        """Run hardened git inside the isolated sandbox (no network, home hidden).
+
+        The repo subtree is the only writable area, so even a hook or filter
+        driver the agent planted in `.git` runs confined to bubblewrap instead
+        of on the host. Defence in depth over `_repo_is_safe` and the `-c` flags.
+        """
+        wt = self.config.memory_dir / "worktrees"
+        wt.mkdir(parents=True, exist_ok=True)
+        # Config neutralised via bwrap --setenv, since --clearenv drops our env.
+        env = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+               "GIT_TERMINAL_PROMPT": "0", "HOME": "/tmp"}
+        argv = sandbox.prefix(self.config, "isolated", workdir=cwd,
+                              extra_rw=(self.repo, wt), env=env) + [*_GIT_SAFE, *args]
+        return _exec(argv, timeout, cwd=cwd, env=_GIT_ENV)
+
     def _git(self, path: Path, *args: str, timeout: float = 60):
         """Run git on the host for a worktree the sandboxed agent could write to.
 
@@ -147,8 +163,8 @@ class Employee:
         code unsandboxed. So the real gitdir (recorded before the agent ran) is
         named explicitly, and every code-executing config vector is disabled.
         """
-        return _exec([*_GIT_SAFE, f"--git-dir={self._gitdirs[path]}", f"--work-tree={path}", *args],
-                     timeout, cwd=path, env=_GIT_ENV)
+        return self._sbx_git(path, f"--git-dir={self._gitdirs[path]}",
+                             f"--work-tree={path}", *args)
 
     async def _agent(self, binary: str, path: Path, prompt: str, model: str,
                      timeout: int, plan: bool = False) -> tuple[int, str]:
@@ -187,8 +203,8 @@ class Employee:
                 r.error = f"refusing repo: {unsafe}"
                 return r
             path.parent.mkdir(parents=True, exist_ok=True)
-            code, out = await _exec([*_GIT_SAFE, "-C", str(self.repo), "worktree", "add",
-                                     "-b", branch, str(path), "HEAD"], 60, env=_GIT_ENV)
+            code, out = await self._sbx_git(self.repo, "-C", str(self.repo), "worktree",
+                                            "add", "-b", branch, str(path), "HEAD")
             if code:
                 r.error = f"worktree failed: {out[-300:]}"
                 return r
@@ -246,8 +262,12 @@ class Employee:
     def cleanup(self, result: Result) -> None:
         """Remove the worktree; the branch stays for the human."""
         import subprocess
-        subprocess.run([*_GIT_SAFE, "-C", str(self.repo), "worktree", "remove", "--force",
-                        result.worktree], capture_output=True, env=_GIT_ENV)
+        wt = self.config.memory_dir / "worktrees"
+        env = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1", "HOME": "/tmp"}
+        argv = sandbox.prefix(self.config, "isolated", workdir=self.repo,
+                              extra_rw=(self.repo, wt), env=env) + [
+            *_GIT_SAFE, "-C", str(self.repo), "worktree", "remove", "--force", result.worktree]
+        subprocess.run(argv, capture_output=True, env=_GIT_ENV)
 
 
 def main() -> int:

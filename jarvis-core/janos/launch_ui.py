@@ -7,6 +7,7 @@ reaches the browser through a 0600 file, not through `ps`-visible arguments,
 and it is spent the moment the page loads.
 """
 
+import os
 import pathlib
 import sys
 
@@ -22,12 +23,14 @@ def main() -> int:
     code = r.json()["code"]
     url = f"http://127.0.0.1:{port}/ui/#code={code}"
     launch = mem / "launch.html"
-    launch.write_text(
-        "<!doctype html><meta charset=utf-8><title>Opening JANOS</title>"
-        f"<script>location.replace({url!r})</script>"
-        "<body style='background:#05080d;color:#36d6ff;font-family:monospace'>Opening JANOS…",
-        encoding="utf-8")
-    launch.chmod(0o600)
+    page = ("<!doctype html><meta charset=utf-8><title>Opening JANOS</title>"
+            f"<script>location.replace({url!r})</script>"
+            "<body style='background:#05080d;color:#36d6ff;font-family:monospace'>Opening JANOS\u2026")
+    # Create owner-only in one step; no readable window, no symlink follow.
+    launch.unlink(missing_ok=True)
+    fd = os.open(launch, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(page)
     print(launch)
     return 0
 

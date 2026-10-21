@@ -71,11 +71,8 @@ class Config:
     employee_model: str = "opencode/deepseek-v4.1-flash-free"
     employee_timeout: int = 900 # seconds for the coding step
 
-    # --- Voice (janos.voice) ---
-    persona: str = ("You are JANOS, a calm, capable personal AI in the spirit of JARVIS. "
-                    "Speak concisely, with understated dry wit. Address the user as 'sir' "
-                    "only occasionally. Never invent facts; say plainly when you do not know.")
-    voice_name: str = "bm_george"   # Kokoro voice: British male
+    # --- Voice & persona (janos.voice, janos.persona) ---
+    persona: str = "jarvis"         # active persona: jarvis | ultron (see janos/persona.py)
     wake_threshold: float = 0.5
     shell_timeout: int = 30
     workspace: Path = field(default_factory=lambda: ROOT / "workspace")
@@ -85,7 +82,7 @@ class Config:
     brave_api_key: str = ""
 
     def __post_init__(self) -> None:
-        for f in ("model", "ollama_url", "voice_name", "keep_alive", "employee_cli", "employee_model"):
+        for f in ("model", "ollama_url", "persona", "keep_alive", "employee_cli", "employee_model"):
             setattr(self, f, _env(f, getattr(self, f)))
         for f in ("timeout", "num_ctx", "max_steps", "max_heal_attempts",
                   "agent_max_turns", "recall_k", "lesson_k", "shell_timeout", "employee_timeout"):
