@@ -475,7 +475,13 @@ class Toolbox:
                 return "Error: expression is required."
             try:
                 tree = ast.parse(expression, mode="eval")
-                return f"{expression} = {_safe_eval(tree)}"
+                value = _safe_eval(tree)
+                # 12 significant digits hides binary float noise (0.18*340 is
+                # 61.199999999999996) without changing any real result.
+                if isinstance(value, float):
+                    value = float(f"{value:.12g}")
+                    value = int(value) if value.is_integer() and abs(value) < 1e15 else value
+                return f"{expression} = {value}"
             except SyntaxError as e:
                 return f"Cannot parse {expression!r}: {e.msg}"
             except Exception as e:

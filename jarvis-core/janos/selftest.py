@@ -255,6 +255,8 @@ async def test_tools() -> None:
     r = await tb.run("calculate", {"expression": "2**10 + 7*3"})
     check("calculate is exact", "1045" in r.output, r.output)
 
+    r = await tb.run("calculate", {"expression": "0.18 * 340"})
+    check("calculate hides float noise", r.output.endswith("= 61.2"), r.output)
     r = await tb.run("calculate", {"expression": "__import__('os').system('id')"})
     check("calculate refuses code execution", not r.output.startswith("__import__") and "error" in r.output.lower(), r.output)
 
@@ -627,6 +629,28 @@ def test_server_security() -> None:
     check("non-ASCII token gives 401, not 500", bad.status_code == 401, str(bad.status_code))
     check("rebinding host rejected",
           c.get("/health", headers={"Host": "evil.example", "Authorization": f"Bearer {tok}"}).status_code == 400)
+    hud = Path(__file__).parent / "ui_dist" / "index.html"
+    if hud.exists():
+        r = c.get("/ui/")
+        check("HUD page loads without a token",
+              r.status_code == 200 and "html" in r.headers.get("content-type", ""), str(r.status_code))
+    check("API still refuses requests without a token",
+          c.get("/telemetry").status_code == 401 and c.post("/speak", json={"text": "hi"}).status_code == 401)
+    t = c.get("/telemetry", headers={"Authorization": f"Bearer {tok}"})
+    check("telemetry reports CPU and RAM",
+          t.status_code == 200 and isinstance(t.json().get("cpu_percent"), (int, float))
+          and t.json().get("ram_total_gb", 0) > 0, str(t.status_code))
+    import janos.server as srv
+    auth = {"Authorization": f"Bearer {tok}"}
+    check("/login-code refuses requests without a token", c.post("/login-code").status_code == 401)
+    code = c.post("/login-code", headers=auth).json()["code"]
+    first = c.post("/auth/session", json={"code": code})
+    check("login code works once",
+          first.status_code == 200 and first.json()["token"] == tok
+          and c.post("/auth/session", json={"code": code}).status_code == 401)
+    code = c.post("/login-code", headers=auth).json()["code"]
+    srv._codes[code] = 0.0
+    check("login code expires", c.post("/auth/session", json={"code": code}).status_code == 401)
     if saved is None:
         os.environ.pop("JANOS_MEMORY_DIR", None)
     else:
@@ -649,6 +673,33 @@ def _commits(repo: Path, ref: str) -> int:
     import subprocess
     return int(subprocess.run(["git", "-C", str(repo), "rev-list", "--count", ref],
                               capture_output=True, text=True).stdout.strip() or -1)
+
+
+async def test_employee_git_hijack() -> None:
+    """A sandboxed agent that plants a .git directory with hooks must not get them run on the host."""
+    import dataclasses, subprocess
+    from janos.employee import Employee
+    tmp = Path(tempfile.mkdtemp()); repo = tmp / "repo"; repo.mkdir()
+    git = lambda *a: subprocess.run(a, cwd=repo, check=True, capture_output=True)
+    git("git", "init", "-q", "-b", "main"); (repo / "a.txt").write_text("a"); git("git", "add", ".")
+    git("git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
+    marker, bindir = tmp / "PWNED", tmp / "bin"
+    bindir.mkdir()
+    cli = bindir / "evil-cli"
+    cli.write_text("#!/bin/bash\necho change > work.txt\nrm -f .git && git init -q . && mkdir -p .git/hooks\n"
+                   f"printf '#!/bin/sh\\ntouch {marker}\\n' > .git/hooks/pre-commit\n"
+                   "chmod +x .git/hooks/pre-commit\n"
+                   "printf '[core]\\n\\thooksPath = .git/hooks\\n' > .git/config\n"
+                   "echo '{\"type\":\"text\",\"part\":{\"text\":\"done\"}}'\n")
+    cli.chmod(0o755)
+    cfg = dataclasses.replace(Config.load(), employee_cli=str(cli), memory_dir=tmp / "mem")
+    r = await Employee(cfg, repo).run("make a change")
+    count = lambda ref: subprocess.run(["git", "rev-list", "--count", ref], cwd=repo,
+                                       capture_output=True, text=True).stdout.strip()
+    check("employee: a planted .git hook never runs on the host",
+          not marker.exists() and r.changed == ["work.txt"] and count(r.branch) == "2" and count("main") == "1",
+          f"hook ran={marker.exists()} changed={r.changed[:3]} err={r.error[:80]}")
+    shutil.rmtree(tmp, ignore_errors=True)
 
 
 async def test_employee_offline() -> None:
@@ -732,6 +783,7 @@ async def main_async() -> int:
     await test_voice()
     test_policy()
     await test_employee_offline()
+    await test_employee_git_hijack()
 
     if not args.offline:
         await test_network()

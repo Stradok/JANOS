@@ -33,7 +33,7 @@ endif
 
 .DEFAULT_GOAL := help
 .PHONY: help \
-        janos janos-setup janos-serve janos-test janos-ask \
+        janos janos-setup janos-serve janos-ui janos-ui-build janos-test janos-ask \
         janos-employee janos-stats janos-lessons janos-reset janos-tools \
         janos-auto janos-auto-night janos-auto-stop \
         setup install install-dev install-optional \
@@ -75,6 +75,17 @@ janos-ask: _janos-check ## JANOS: one-shot question — make janos-ask Q="what i
 	@$(JPY) -m janos.cli $(Q)
 
 janos-serve: _janos-check ## JANOS: HTTP API on $(HOST):$(PORT)
+	@$(JVENV)/bin/uvicorn janos.server:app --host $(JANOS_HOST) --port $(PORT)
+
+janos-ui-build: ## JANOS: build the HUD (needs Node)
+	@cd ../UI/janos-hud && npm install --no-audit --no-fund && npm run build
+
+janos-ui: _janos-check ## JANOS: open the HUD in your browser
+	@test -f janos/ui_dist/index.html || $(MAKE) janos-ui-build
+	@( for i in $$(seq 1 150); do \
+	     CODE=$$($(JPY) -c "import httpx,pathlib;t=pathlib.Path('$(MEMORY)/api_token').read_text().strip();print(httpx.post('http://127.0.0.1:$(PORT)/login-code',headers={'Authorization':'Bearer '+t}).json()['code'])" 2>/dev/null) && break; \
+	     CODE=; sleep 0.1; done; \
+	   test -n "$$CODE" && xdg-open "http://127.0.0.1:$(PORT)/ui/#code=$$CODE" >/dev/null 2>&1 ) &
 	@$(JVENV)/bin/uvicorn janos.server:app --host $(JANOS_HOST) --port $(PORT)
 
 janos-test: _janos-check ## JANOS: self-test — add OFFLINE=1 to skip model/network

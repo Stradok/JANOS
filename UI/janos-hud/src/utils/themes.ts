@@ -1,0 +1,36 @@
+import { ThemeColors, VisualTheme } from '../types';
+
+export const THEMES: Record<VisualTheme, ThemeColors> = {
+  jarvis: {
+    name: 'J.A.R.V.I.S. Cyan',
+    accent: '#36d6ff',
+    coreInner: '#ffffff',
+    coreOuter: '#00c8ff',
+    glowColor: '#36d6ff',
+    particleColor: '#5fe0ff',
+    shellExterior: '#090d12',
+    shellInterior: '#081a24',
+    ambientLight: '#040d14',
+    shellEmissive: 0x061820,
+    bounceLight: 0x08293a,
+    fog: 0x021018,
+    lightIntensity: 4.2,
+    metallicTrim: 0x1e2832,
+  },
+  ultron: {
+    name: 'Ultron Crimson',
+    accent: '#ef233c',
+    coreInner: '#fff0f2',
+    coreOuter: '#ef233c',
+    glowColor: '#ff2b45',
+    particleColor: '#d90429',
+    shellExterior: '#0b0c0f',
+    shellInterior: '#1f0407',
+    ambientLight: '#120204',
+    shellEmissive: 0x180306,
+    bounceLight: 0x350810,
+    fog: 0x180205,
+    lightIntensity: 4.8,
+    metallicTrim: 0x22262e,
+  },
+};

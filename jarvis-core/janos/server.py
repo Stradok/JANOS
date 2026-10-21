@@ -8,6 +8,10 @@ Endpoints
     POST /chat              {"input": "..."} -> full turn record
     POST /chat/stream       same, streamed as server-sent events
     POST /feedback          {"episode_id": "...", "rating": 1-5}
+    GET  /telemetry         CPU / RAM / GPU for the HUD
+    POST /speak             {"text": "..."} -> audio/wav (Kokoro TTS)
+    POST /login-code        one-time code to open the HUD (POST /auth/session trades it for the token)
+    GET  /ui/               the HUD (static; the API routes above still need the token)
     GET  /agents /tools
     GET  /memory/stats /memory/recent /memory/lessons /rankings
 """
@@ -16,15 +20,20 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import io
 import json
 import os
 import secrets
+import time
+import wave
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from janos.config import Config
@@ -111,6 +120,10 @@ class ChatIn(BaseModel):
     input: str = Field(..., min_length=1, description="the task or question")
 
 
+class SpeakIn(BaseModel):
+    text: str = Field(..., min_length=1, max_length=1000)
+
+
 class FeedbackIn(BaseModel):
     episode_id: str
     rating: int = Field(..., ge=1, le=5)
@@ -125,13 +138,115 @@ async def root() -> dict[str, Any]:
         "description": "Local autonomous, self-healing agent system with one supervisor",
         "endpoints": ["/health", "/chat", "/chat/stream", "/feedback", "/agents",
                       "/tools", "/memory/stats", "/memory/recent", "/memory/lessons",
-                      "/rankings"],
+                      "/rankings", "/telemetry", "/speak", "/login-code", "/ui/"],
     }
 
 
 @app.get("/health")
 async def health() -> dict[str, Any]:
     return await sup().health()
+
+
+# Single-use login codes: let `make janos-ui` open the browser without putting the
+# long-lived token in argv or a URL. {code: expiry (time.monotonic)}
+_codes: dict[str, float] = {}
+CODE_TTL = 60
+CODE_MAX = 5
+
+
+@app.post("/login-code")
+async def login_code() -> dict[str, Any]:
+    now = time.monotonic()
+    for c in [c for c, t in _codes.items() if t <= now]:
+        del _codes[c]
+    while len(_codes) >= CODE_MAX:
+        del _codes[next(iter(_codes))]      # dicts keep insertion order: oldest first
+    code = secrets.token_urlsafe(16)
+    _codes[code] = now + CODE_TTL
+    return {"code": code, "expires_in": CODE_TTL}
+
+
+class SessionIn(BaseModel):
+    code: str = Field(..., max_length=200)
+
+
+# Mounted sub-apps skip the parent's token dependency, which is the point: this
+# is how the page trades a one-time code for the token. TrustedHost still applies.
+auth_app = FastAPI(title="JANOS auth")
+
+
+@auth_app.post("/session")
+async def auth_session(body: SessionIn) -> dict[str, str]:
+    now = time.monotonic()
+    hit = next((c for c in _codes if hmac.compare_digest(c.encode(), body.code.encode())), None)
+    expiry = _codes.pop(hit, 0.0) if hit else 0.0      # popped even if expired: single use
+    if not hit or expiry <= now:
+        raise HTTPException(401, "Login code invalid or expired")
+    return {"token": api_token()}
+
+
+app.mount("/auth", auth_app)
+
+
+@app.get("/telemetry")
+async def telemetry() -> dict[str, Any]:
+    import psutil
+    vm = psutil.virtual_memory()
+    gpu = None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "nvidia-smi", "--query-gpu=name,utilization.gpu,memory.used,memory.total",
+            "--format=csv,noheader,nounits",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        try:
+            out, _ = await asyncio.wait_for(proc.communicate(), 3)
+        except asyncio.TimeoutError:
+            proc.kill()
+            raise
+        name, util, used, total = [x.strip() for x in out.decode().splitlines()[0].split(",")]
+        gpu = {"name": name, "util_percent": float(util),
+               "vram_used_mb": float(used), "vram_total_mb": float(total)}
+    except Exception:       # no NVIDIA GPU, driver hiccup, timeout: HUD shows "no GPU"
+        gpu = None
+    return {"cpu_percent": psutil.cpu_percent(interval=None),
+            "ram_used_gb": round(vm.used / 2**30, 2),
+            "ram_total_gb": round(vm.total / 2**30, 2), "gpu": gpu}
+
+
+def _tts():
+    """Kokoro only (no Whisper), loaded on first /speak and cached."""
+    if "tts" not in _state:
+        config = Config.load()
+        models = config.memory_dir / "models"
+        os.environ.setdefault("HF_HOME", str(models / "hf"))
+        from kokoro_onnx import Kokoro
+        _state["tts"] = Kokoro(str(models / "kokoro-v1.0.int8.onnx"),
+                               str(models / "voices-v1.0.bin"))
+        _state["voice"] = config.voice_name
+    return _state["tts"], _state["voice"]
+
+
+def _wav(text: str) -> bytes:
+    import numpy as np
+    tts, voice = _tts()
+    audio, sr = tts.create(text, voice=voice, speed=1.0, lang="en-gb")
+    pcm = (np.clip(audio, -1, 1) * 32767).astype("<i2")
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sr)
+        w.writeframes(pcm.tobytes())
+    return buf.getvalue()
+
+
+@app.post("/speak")
+async def speak(body: SpeakIn) -> Response:
+    try:
+        data = await asyncio.to_thread(_wav, body.text)
+    except (ImportError, FileNotFoundError, ValueError, OSError) as e:
+        raise HTTPException(503, f"Speech unavailable (run `make janos-voice-setup`): {e}")
+    return Response(data, media_type="audio/wav")
 
 
 @app.post("/chat")
@@ -247,6 +362,13 @@ async def memory_episode(episode_id: str) -> dict[str, Any]:
 @app.get("/rankings")
 async def rankings() -> dict[str, Any]:
     return {"rankings": sup().memory.rankings()}
+
+
+# Static HUD. A mounted sub-app skips the app-level token dependency on purpose:
+# the page loads without a token, every API route above still requires one.
+_UI = Path(__file__).parent / "ui_dist"
+if _UI.is_dir():
+    app.mount("/ui", StaticFiles(directory=_UI, html=True), name="ui")
 
 
 def main() -> None:

@@ -291,7 +291,12 @@ class Supervisor:
         async def delegate_coding(task: str = "", repo: str = "", test_cmd: str = "") -> str:
             if not task.strip():
                 return "Error: describe the coding task in `task`."
-            root = Path(repo) if repo else Path(__file__).resolve().parents[2]
+            janos_repo = Path(__file__).resolve().parents[2]
+            root = Path(repo).expanduser().resolve() if repo else janos_repo
+            # The model picks the path; only JANOS itself and the workspace are allowed.
+            if not (root == janos_repo or root.is_relative_to(self.config.workspace.resolve())):
+                return (f"Refused: {root} is outside the JANOS repository and the workspace. "
+                        "Put the project under the workspace first.")
             try:
                 emp = Employee(self.config, root)
             except ValueError as e:

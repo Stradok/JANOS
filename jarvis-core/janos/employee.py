@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import json
 import re
 import shutil
@@ -71,10 +72,11 @@ def _slug(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")
 
 
-async def _exec(argv: list[str], timeout: float, cwd: Path | None = None) -> tuple[int, str]:
+async def _exec(argv: list[str], timeout: float, cwd: Path | None = None,
+                env: dict[str, str] | None = None) -> tuple[int, str]:
     """Run argv, return (exit code, stdout+stderr). Kills on timeout (code -9)."""
     proc = await asyncio.create_subprocess_exec(
-        *argv, cwd=cwd, stdin=asyncio.subprocess.DEVNULL,
+        *argv, cwd=cwd, env=env, stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
     try:
         out, _ = await asyncio.wait_for(proc.communicate(), timeout)
@@ -91,6 +93,7 @@ class Employee:
         self.repo = Path(repo).resolve()
         if not (self.repo / ".git").exists():
             raise ValueError(f"{self.repo} is not a git repository")
+        self._gitdirs: dict[Path, Path] = {}
 
     def _binary(self) -> str | None:
         if self.config.employee_cli:
@@ -100,18 +103,33 @@ class Employee:
         return shutil.which("opencode")
 
     def _git(self, path: Path, *args: str, timeout: float = 60):
-        return _exec(["git", "-C", str(path), *args], timeout)
+        """Run git on the host for a worktree the sandboxed agent could write to.
+
+        The agent can rewrite anything in its worktree, including the `.git`
+        file, and could replace it with a directory holding its own config and
+        hooks; a plain `git -C worktree commit` on the host would then run that
+        code unsandboxed. So the real gitdir (recorded before the agent ran) is
+        named explicitly, and hooks, fsmonitor, global and system config are off.
+        """
+        env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+        return _exec(["git", f"--git-dir={self._gitdirs[path]}", f"--work-tree={path}",
+                      "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", *args],
+                     timeout, cwd=path, env=env)
 
     async def _agent(self, binary: str, path: Path, prompt: str, model: str,
                      timeout: int, plan: bool = False) -> tuple[int, str]:
         home = Path.home()
-        share, cache = home / ".local/share/opencode", home / ".cache/opencode"
-        share.mkdir(parents=True, exist_ok=True)
-        cache.mkdir(parents=True, exist_ok=True)
+        # Private state: the agent never writes the user's own OpenCode sessions,
+        # caches or credentials, so nothing it does persists into the user's tools.
+        state = self.config.memory_dir / "employee-state"
+        data, cache = state / "data", state / "cache"
+        for d in (data / "opencode", cache):
+            d.mkdir(parents=True, exist_ok=True)
         argv = sandbox.prefix(
             self.config, "worker", workdir=path,
             extra_ro=(home / ".config/opencode", self.repo / ".git", Path(binary).resolve().parent),
-            extra_rw=(share, cache))
+            extra_rw=(state,),
+            env={"XDG_DATA_HOME": str(data), "XDG_CACHE_HOME": str(cache)})
         argv += [binary, "run", "--format", "json", "--model", model or self.config.employee_model,
                  *(["--agent", "plan"] if plan else []), "--dir", str(path), prompt]
         return await _exec(argv, timeout, cwd=path)
@@ -136,6 +154,12 @@ class Employee:
             if code:
                 r.error = f"worktree failed: {out[-300:]}"
                 return r
+            # Record the real gitdir now, before the agent can touch the worktree.
+            pointer = (path / ".git").read_text(encoding="utf-8").strip()
+            gitdir = Path(pointer.removeprefix("gitdir:").strip())
+            if not gitdir.is_absolute():
+                gitdir = (path / gitdir).resolve()
+            self._gitdirs[path] = gitdir
 
             rules = ("\n\nRules: work only inside the current directory; make the smallest change "
                      "that satisfies the task; "

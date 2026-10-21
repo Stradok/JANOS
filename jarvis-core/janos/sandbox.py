@@ -23,9 +23,12 @@ Two profiles:
             smoke test runs model-written code that is already AST-scanned.
 
   worker    for a coding employee (janos/employee.py). Like observe, but the only
-            writable place is the task's own git worktree (plus the coding CLI's
-            own state directories), and network is on so the CLI can reach its
+            writable places are the task's own git worktree and the employee's
+            private state directory, and network is on so the CLI can reach its
             model. Commits happen outside, on the host, after the run.
+            Open risk: the network namespace is shared, so the worker can reach
+            unauthenticated services on localhost (e.g. Ollama). Fixing it needs
+            an egress-filtered namespace (pasta / slirp4netns), not installed.
 
 When bubblewrap is missing or `sandbox: false` is configured, prefix() returns
 [] and the caller runs the process directly. health() reports which, so the
@@ -71,7 +74,7 @@ def _venv() -> Path | None:
 
 def prefix(config: Config, profile: str, *, network: bool = False,
            extra_ro: tuple[Path, ...] = (), extra_rw: tuple[Path, ...] = (),
-           workdir: Path | None = None) -> list[str]:
+           workdir: Path | None = None, env: dict[str, str] | None = None) -> list[str]:
     """argv to put in front of a command, or [] to run it unsandboxed.
 
     `workdir` replaces the workspace as the one writable, current directory.
@@ -122,6 +125,8 @@ def prefix(config: Config, profile: str, *, network: bool = False,
     for p in (Path(x) for x in extra_rw):
         if p.exists():
             args += ["--bind", str(p), str(p)]
+    for k, v in (env or {}).items():
+        args += ["--setenv", k, v]
     return args + ["--chdir", ws, "--die-with-parent", "--new-session"]
 
 

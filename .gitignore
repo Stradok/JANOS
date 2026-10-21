@@ -12,6 +12,7 @@ jarvis-core/memory/chroma_db/
 jarvis-core/memory/chroma_episodic/
 jarvis-core/workspace/
 jarvis-core/memory/worktrees/
+jarvis-core/memory/employee-state/
 
 # Tools JANOS wrote for itself — machine-written, rebuilt on demand
 jarvis-core/janos/generated/*.py
@@ -38,3 +39,7 @@ jarvis-core/memory/models/
 jarvis-core/memory/policy.npz*
 jarvis-core/memory/policy.lock
 jarvis-core/memory/autorun.pid
+
+# HUD build output and deps
+jarvis-core/janos/ui_dist/
+UI/janos-hud/node_modules/
