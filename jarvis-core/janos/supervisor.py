@@ -29,6 +29,7 @@ from typing import Any, Callable
 from janos.agents import Agent, AgentRunner, DEFAULT_AGENTS
 from janos.config import Config
 from janos import sandbox
+from janos.employee import Employee
 from janos.forge import ToolForge
 from janos.playbooks import PlaybookForge
 from janos.policy import Policy, reward
@@ -219,6 +220,7 @@ class Supervisor:
         self._install_playbooks()
         for name in self.playbooks.load_all():
             self._grant(name)
+        self._install_employee()
 
     # --------------------------------------------------- self-extension
 
@@ -284,6 +286,40 @@ class Supervisor:
         agent = self.runner.agents.get("engineer")
         if agent and "create_playbook" not in agent.tools:
             agent.tools.append("create_playbook")
+
+    def _install_employee(self) -> None:
+        async def delegate_coding(task: str = "", repo: str = "", test_cmd: str = "") -> str:
+            if not task.strip():
+                return "Error: describe the coding task in `task`."
+            root = Path(repo) if repo else Path(__file__).resolve().parents[2]
+            try:
+                emp = Employee(self.config, root)
+            except ValueError as e:
+                return f"Error: {e}"
+            self._emit({"type": "employee", "stage": "start", "task": task})
+            r = await emp.run(task, test_cmd=test_cmd)
+            self._emit({"type": "employee", "stage": "done", "ok": r.ok, "branch": r.branch})
+            tests = "not run" if r.tests_ok is None else "passed" if r.tests_ok else "failed"
+            out = (f"Verdict {r.verdict}; branch {r.branch}; changed {', '.join(r.changed) or 'nothing'}; "
+                   f"tests {tests}. Review: {r.review[-400:]}")
+            if r.error:
+                out += f" Error: {r.error}."
+            if r.changed:
+                out += f" Review and merge it yourself with: git -C {emp.repo} merge {r.branch}"
+            return out
+
+        self.toolbox.add(Tool(
+            name="delegate_coding",
+            description=("Have a sandboxed coding agent (OpenCode) do one coding task on its own git "
+                         "branch, run tests and review it. Never merges; the human merges."),
+            params={"task": "str: the coding task", "repo": "str: optional git repo path",
+                    "test_cmd": "str: optional command that must pass"},
+            run=delegate_coding,
+            danger=True,
+        ))
+        agent = self.runner.agents.get("engineer")
+        if agent and "delegate_coding" not in agent.tools:
+            agent.tools.append("delegate_coding")
 
     # ------------------------------------------------------------ plumbing
 

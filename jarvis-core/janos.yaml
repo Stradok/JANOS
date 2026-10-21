@@ -38,6 +38,13 @@ allow_shell: true      # set false to remove shell access entirely
 sandbox: true          # shell / run_python / smoke tests run inside bubblewrap
 shell_network: false   # true lets the shell reach the network and local services
 
+# --- Employees (make janos-employee) -----------------------------------
+# OpenCode does a coding task on its own git branch, sandboxed. Free OpenCode
+# models run in the cloud: the task text and your code are sent to the provider.
+employee_cli: ""       # empty = auto-detect the OpenCode binary
+employee_model: opencode/deepseek-v4.1-flash-free
+employee_timeout: 900  # seconds allowed for the coding step
+
 # --- Voice (make janos-voice) ------------------------------------------
 # Wake word "hey jarvis" -> speech-to-text -> JANOS -> spoken reply. Local, English.
 voice_name: bm_george  # Kokoro voices: bm_george, bm_lewis (British), am_adam, af_heart (US)

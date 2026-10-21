@@ -13,6 +13,7 @@ import asyncio
 import re
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -20,6 +21,7 @@ from typing import Any, Callable
 
 from janos.auto import AutonomousLoop
 from janos.config import Config
+from janos.employee import Employee, parse_events, SNAP_BIN
 from janos.forge import (_looks_like_failure, _parse_name, _parse_params, _scan)
 from janos.memory import Memory
 from janos.supervisor import Supervisor, check_arithmetic
@@ -631,6 +633,85 @@ def test_server_security() -> None:
         os.environ["JANOS_MEMORY_DIR"] = saved
 
 
+def _git_repo(files: dict[str, str]) -> Path:
+    import subprocess
+    repo = Path(tempfile.mkdtemp()) / "repo"
+    repo.mkdir()
+    for n, c in files.items():
+        (repo / n).write_text(c)
+    for a in (["init", "-q", "-b", "main"], ["add", "-A"],
+              ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init"]):
+        subprocess.run(["git", "-C", str(repo), *a], check=True)
+    return repo
+
+
+def _commits(repo: Path, ref: str) -> int:
+    import subprocess
+    return int(subprocess.run(["git", "-C", str(repo), "rev-list", "--count", ref],
+                              capture_output=True, text=True).stdout.strip() or -1)
+
+
+async def test_employee_offline() -> None:
+    import dataclasses
+    import subprocess
+    section("Employee")
+    sample = "\n".join([
+        '{"type":"step_start","part":{}}', "not json at all",
+        '{"type":"text","part":{"text":"Done."}}', '{"type":"tool_use","part":{}}',
+        '{"type":"step_finish","part":{"tokens":{"total":120},"cost":0}}'])
+    check("employee parses OpenCode events", parse_events(sample) == ("Done.", 120, 0.0, 1),
+          str(parse_events(sample)))
+    try:
+        Employee(Config.load(), Path(tempfile.mkdtemp()))
+        refused = False
+    except ValueError:
+        refused = True
+    check("employee refuses a non-git directory", refused)
+
+    repo = _git_repo({"README": "x\n"})
+    bindir = repo.parent / "bin"
+    bindir.mkdir()
+    fake = bindir / "fakecli"
+    fake.write_text('#!/bin/bash\necho hi > hello.txt\n'
+                    'echo \'{"type":"text","part":{"text":"made hello.txt"}}\'\n')
+    fake.chmod(0o755)
+    cfg = dataclasses.replace(Config.load(), employee_cli=str(fake), memory_dir=repo.parent / "mem")
+    emp = Employee(cfg, repo)
+    r = await emp.run("add hello file", test_cmd="test -f hello.txt", timeout=60)
+    branches = subprocess.run(["git", "-C", str(repo), "branch", "--list", r.branch],
+                              capture_output=True, text=True).stdout
+    check("employee works on its own branch and never touches main",
+          bool(r.branch) and r.branch in branches and _commits(repo, "main") == 1
+          and _commits(repo, r.branch) == 2 and r.changed == ["hello.txt"] and r.tests_ok is True,
+          str(r.as_dict()))
+    check("employee never assumes approval", r.verdict == "UNKNOWN" and r.ok is False, r.verdict)
+    emp.cleanup(r)
+    check("employee cleanup removes the worktree but keeps the branch",
+          not Path(r.worktree).exists() and _commits(repo, r.branch) == 2)
+    shutil.rmtree(repo.parent, ignore_errors=True)
+
+
+async def test_employee_live() -> None:
+    section("Employee (live OpenCode)")
+    if not SNAP_BIN.exists() and not shutil.which("opencode"):
+        print("  opencode not installed, skipped")
+        return
+    import dataclasses
+    repo = _git_repo({"calc.py": "def add(a, b): return a - b\n",
+                      "test_calc.py": "from calc import add; assert add(2, 3) == 5\n"})
+    cfg = dataclasses.replace(Config.load(), memory_dir=repo.parent / "mem")
+    emp = Employee(cfg, repo)
+    r = await emp.run("Fix the add function in calc.py so test_calc.py passes",
+                      test_cmd="python3 test_calc.py", timeout=600)
+    print(f"  {r.seconds}s, {r.tokens} tokens, cost {r.cost}, verdict {r.verdict}")
+    check("employee fixed a real bug on its own branch",
+          r.tests_ok is True and "calc.py" in r.changed and _commits(repo, "main") == 1,
+          str(r.as_dict()))
+    check("employee review returned a verdict", r.verdict in ("APPROVE", "REJECT"), r.review[-300:])
+    emp.cleanup(r)
+    shutil.rmtree(repo.parent, ignore_errors=True)
+
+
 async def main_async() -> int:
     ap = argparse.ArgumentParser(description="JANOS self-test")
     ap.add_argument("--offline", action="store_true", help="skip Ollama and network checks")
@@ -650,9 +731,11 @@ async def main_async() -> int:
     await test_playbooks()
     await test_voice()
     test_policy()
+    await test_employee_offline()
 
     if not args.offline:
         await test_network()
+        await test_employee_live()
         sup = Supervisor(Config.load())
         try:
             if await test_llm(sup):

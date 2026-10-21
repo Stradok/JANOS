@@ -34,7 +34,7 @@ endif
 .DEFAULT_GOAL := help
 .PHONY: help \
         janos janos-setup janos-serve janos-test janos-ask \
-        janos-stats janos-lessons janos-reset janos-tools \
+        janos-employee janos-stats janos-lessons janos-reset janos-tools \
         janos-auto janos-auto-night janos-auto-stop \
         setup install install-dev install-optional \
         dev prod start \
@@ -79,6 +79,9 @@ janos-serve: _janos-check ## JANOS: HTTP API on $(HOST):$(PORT)
 
 janos-test: _janos-check ## JANOS: self-test — add OFFLINE=1 to skip model/network
 	@$(JPY) -m janos.selftest $(if $(OFFLINE),--offline,)
+
+janos-employee: _janos-check ## JANOS: have OpenCode do a coding task on a new branch — TASK="..." [REPO=path] [TEST="cmd"]
+	@$(JPY) -m janos.employee "$(TASK)" $(if $(REPO),--repo "$(REPO)",) $(if $(TEST),--test "$(TEST)",)
 
 janos-stats: _janos-check ## JANOS: memory statistics and agent rankings
 	@$(JPY) -c "from janos.config import Config; from janos.memory import Memory; \

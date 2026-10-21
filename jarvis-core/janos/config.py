@@ -66,6 +66,11 @@ class Config:
     sandbox: bool = True        # run shell / run_python / smoke tests inside bubblewrap
     shell_network: bool = False # let the sandboxed shell reach the network and localhost
 
+    # --- Employees (janos/employee.py) ---
+    employee_cli: str = ""      # coding CLI binary; empty = auto-detect OpenCode
+    employee_model: str = "opencode/deepseek-v4.1-flash-free"
+    employee_timeout: int = 900 # seconds for the coding step
+
     # --- Voice (janos.voice) ---
     persona: str = ("You are JANOS, a calm, capable personal AI in the spirit of JARVIS. "
                     "Speak concisely, with understated dry wit. Address the user as 'sir' "
@@ -80,10 +85,10 @@ class Config:
     brave_api_key: str = ""
 
     def __post_init__(self) -> None:
-        for f in ("model", "ollama_url", "voice_name", "keep_alive"):
+        for f in ("model", "ollama_url", "voice_name", "keep_alive", "employee_cli", "employee_model"):
             setattr(self, f, _env(f, getattr(self, f)))
         for f in ("timeout", "num_ctx", "max_steps", "max_heal_attempts",
-                  "agent_max_turns", "recall_k", "lesson_k", "shell_timeout"):
+                  "agent_max_turns", "recall_k", "lesson_k", "shell_timeout", "employee_timeout"):
             setattr(self, f, _env(f, getattr(self, f)))
         for f in ("temperature", "min_pass_score", "wake_threshold", "rl_explore", "rl_explore_auto"):
             setattr(self, f, _env(f, getattr(self, f)))

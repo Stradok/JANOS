@@ -11,6 +11,7 @@ jarvis-core/memory/*.db-journal
 jarvis-core/memory/chroma_db/
 jarvis-core/memory/chroma_episodic/
 jarvis-core/workspace/
+jarvis-core/memory/worktrees/
 
 # Tools JANOS wrote for itself — machine-written, rebuilt on demand
 jarvis-core/janos/generated/*.py

@@ -22,6 +22,11 @@ Two profiles:
             such as Ollama, which has no authentication. Accepted for now: the
             smoke test runs model-written code that is already AST-scanned.
 
+  worker    for a coding employee (janos/employee.py). Like observe, but the only
+            writable place is the task's own git worktree (plus the coding CLI's
+            own state directories), and network is on so the CLI can reach its
+            model. Commits happen outside, on the host, after the run.
+
 When bubblewrap is missing or `sandbox: false` is configured, prefix() returns
 [] and the caller runs the process directly. health() reports which, so the
 fallback is never silent.
@@ -65,13 +70,17 @@ def _venv() -> Path | None:
 
 
 def prefix(config: Config, profile: str, *, network: bool = False,
-           extra_ro: tuple[Path, ...] = ()) -> list[str]:
-    """argv to put in front of a command, or [] to run it unsandboxed."""
+           extra_ro: tuple[Path, ...] = (), extra_rw: tuple[Path, ...] = (),
+           workdir: Path | None = None) -> list[str]:
+    """argv to put in front of a command, or [] to run it unsandboxed.
+
+    `workdir` replaces the workspace as the one writable, current directory.
+    """
     if not active(config):
         return []
-    ws = str(config.workspace.resolve())
+    ws = str((workdir or config.workspace).resolve())
 
-    if profile == "observe":
+    if profile in ("observe", "worker"):
         home = str(Path.home())
         # A minimal /dev plus the GPU nodes only: the full host /dev exposes a
         # shared writable /dev/shm and, for users in `input`, the keyboard.
@@ -88,7 +97,7 @@ def prefix(config: Config, profile: str, *, network: bool = False,
                 "--tmpfs", home, "--unshare-ipc",
                 # A shared network namespace also shares abstract sockets (X11)
                 # and every service on localhost.
-                *([] if config.shell_network else ["--unshare-net"]),
+                *([] if (profile == "worker" or config.shell_network) else ["--unshare-net"]),
                 "--clearenv", "--setenv", "PATH", "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
                 "--setenv", "HOME", home, "--setenv", "LANG", "C.UTF-8", "--setenv", "TERM", "dumb"]
     elif profile == "isolated":
@@ -110,6 +119,9 @@ def prefix(config: Config, profile: str, *, network: bool = False,
     for p in ([venv] if venv else []) + [Path(x) for x in extra_ro]:
         if p.exists():
             args += ["--ro-bind", str(p), str(p)]
+    for p in (Path(x) for x in extra_rw):
+        if p.exists():
+            args += ["--bind", str(p), str(p)]
     return args + ["--chdir", ws, "--die-with-parent", "--new-session"]
 
 
