@@ -101,7 +101,7 @@ DEFAULT_AGENTS: list[Agent] = [
         name="researcher",
         role="information gatherer",
         purpose="Find current, accurate facts from the web and from memory, then summarise them with sources.",
-        tools=["web_search", "web_fetch", "recall_memory", "save_note", "now", "calculate"],
+        tools=["web_search", "web_fetch", "browser_fetch", "recall_memory", "save_note", "now", "calculate"],
         guidance="- Search first, then fetch the most promising URL for detail.\n"
                  "- Cite the URLs you actually used.\n"
                  "- Any arithmetic goes through calculate, never your head.",

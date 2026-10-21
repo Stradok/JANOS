@@ -15,3 +15,4 @@ uvicorn[standard]>=0.29
 pydantic>=2.6       # request models
 psutil>=5.9         # system_info tool
 PyYAML>=6.0         # janos.yaml
+# playwright>=1.40   # optional extra: enables browser_fetch (then: playwright install chromium)

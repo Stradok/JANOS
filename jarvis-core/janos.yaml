@@ -35,6 +35,7 @@ rl_explore: 0.05       # how often it tries another route while you wait
 rl_explore_auto: 0.2   # the same in autonomous mode
 
 # --- Tools -------------------------------------------------------------
+# browser_fetch (researcher) renders JavaScript pages via headless Chromium; needs playwright.
 allow_shell: true      # set false to remove shell access entirely
 sandbox: true          # shell / run_python / smoke tests run inside bubblewrap
 shell_network: false   # true lets the shell reach the network and local services

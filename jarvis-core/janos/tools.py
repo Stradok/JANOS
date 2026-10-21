@@ -15,12 +15,14 @@ import ast
 import asyncio
 import html
 import io
+import ipaddress
 import json
 import operator
 import os
 import platform
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import textwrap
@@ -421,6 +423,101 @@ class Toolbox:
             body = html.unescape(body)
             return f"[{url}]\n{body[:max(500, max_chars)]}"
 
+        def _bad_ip(ip: Any) -> bool:
+            return (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+                    or ip.is_multicast or ip.is_unspecified or not ip.is_global)
+
+        async def _resolve_public(host: str) -> tuple[str, str]:
+            """Resolve once. Returns (first_ip, '') if EVERY address is public, else ('', reason)."""
+            try:
+                infos = await asyncio.to_thread(socket.getaddrinfo, host, None)
+            except (OSError, UnicodeError) as e:
+                return "", f"cannot resolve {host!r}: {e}"
+            ips = [ipaddress.ip_address(i[4][0].split("%")[0]) for i in infos]
+            for ip in ips:
+                if _bad_ip(ip):
+                    return "", f"{host} resolves to internal address {ip}"
+            return (str(ips[0]), "") if ips else ("", f"{host!r} has no address")
+
+        async def browser_fetch(url: str = "", max_chars: int = 3000, wait_ms: int = 1500) -> str:
+            if not url.strip():
+                return "Error: url is required."
+            url = url.strip()
+            if "://" not in url:
+                url = "https://" + url
+            u = urlparse(url)
+            if u.scheme not in ("http", "https") or not u.hostname:
+                return "Error: only http/https URLs are supported."
+            try:
+                port = u.port
+            except ValueError:
+                return "Refused: invalid port."
+            if port not in (None, 80, 443):
+                return f"Refused: non-standard port {port} is not allowed."
+            host = u.hostname
+            pinned_ip, why = await _resolve_public(host)
+            if why:
+                return f"Refused: internal or unresolvable target ({why})."
+            try:
+                from playwright.async_api import async_playwright
+            except ImportError:
+                return "Browser fetch unavailable: Playwright not installed."
+
+            async def gate(route):
+                req = route.request
+                ru = urlparse(req.url)
+                try:
+                    ok = (ru.scheme in ("http", "https") and ru.hostname
+                          and ru.port in (None, 80, 443)
+                          and req.resource_type not in ("media", "font"))
+                except ValueError:
+                    ok = False
+                if ok and ru.hostname != host:
+                    # Not the pinned host: re-validate by resolved IP on every request (no cache).
+                    # ponytail: Chromium re-resolves these itself, so a rebinding race remains for third-party hosts.
+                    ok = not (await _resolve_public(ru.hostname))[1]
+                if ok:
+                    await route.continue_()
+                else:
+                    await route.abort()
+
+            async def run() -> str:
+                # Chromium sandbox stays ON (no --no-sandbox). Host is pinned to the validated IP.
+                args = ["--disable-dev-shm-usage", "--disable-gpu"]
+                if host != pinned_ip:  # IP literals need no pin
+                    args.append(f"--host-resolver-rules=MAP {host} {pinned_ip},EXCLUDE localhost")
+                async with async_playwright() as pw:
+                    try:
+                        browser = await pw.chromium.launch(headless=True, args=args)
+                    except Exception as e:
+                        if "sandbox" in str(e).lower():
+                            return "Browser fetch unavailable: Chromium sandbox could not start"
+                        raise
+                    try:
+                        ctx = await browser.new_context(
+                            user_agent=("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                                        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"),
+                            java_script_enabled=True, service_workers="block", accept_downloads=False)
+                        page = await ctx.new_page()
+                        await page.route("**/*", gate)
+                        await page.route_web_socket("**/*", lambda ws: ws.close())
+                        await page.goto(url, wait_until="domcontentloaded", timeout=15000)
+                        await page.wait_for_timeout(min(max(wait_ms, 0), 5000))
+                        return await page.evaluate("document.body ? document.body.innerText : ''")
+                    finally:
+                        await browser.close()
+
+            try:
+                text = await asyncio.wait_for(run(), timeout=20)
+            except Exception as e:
+                return f"Browser fetch failed: {type(e).__name__}: {str(e)[:200]}"
+            text = re.sub(r"\s+", " ", text).strip()
+            if not text:
+                return f"[{url}]\n(page rendered but has no text)"
+            n = max(500, max_chars)
+            note = f"\n… [truncated, {len(text)} chars total]" if len(text) > n else ""
+            return f"[{url}]\n{text[:n]}{note}"
+
         # ---- files -----------------------------------------------------
         async def read_file(path: str = "", max_chars: int = 4000) -> str:
             p = self._resolve(path)
@@ -640,6 +737,8 @@ class Toolbox:
              {"query": "str", "max_results": "int=5"}, web_search, False),
             ("web_fetch", "Download a URL and return its readable text.",
              {"url": "str", "max_chars": "int=3000"}, web_fetch, False),
+            ("browser_fetch", "Fetch a URL in a real browser so JavaScript runs, then return the page text. Use only when web_fetch returns little or the site needs JavaScript.",
+             {"url": "str", "max_chars": "int=3000", "wait_ms": "int=1500"}, browser_fetch, False),
             ("read_file", "Read a text file from disk.",
              {"path": "str", "max_chars": "int=4000"}, read_file, False),
             ("write_file", "Write or append text to a file.",

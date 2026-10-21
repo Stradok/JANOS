@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -338,6 +339,12 @@ async def test_tools() -> None:
     r = await tb.run("calculate", {"wrong_arg": 1})
     check("bad arguments handled", isinstance(r.output, str))
 
+    t0 = time.monotonic()
+    outs = [(await tb.run("browser_fetch", {"url": u})).output
+            for u in ("http://127.0.0.1:11434", "http://169.254.169.254/", "http://[::1]/", "localhost", "http://example.com:22")]
+    check("browser_fetch refuses internal targets",
+          all(o.startswith("Refused") for o in outs) and time.monotonic() - t0 < 3, str(outs))
+
 
 async def test_network() -> None:
     section("Network tools")
@@ -347,6 +354,11 @@ async def test_network() -> None:
     check("web_search returns results", hit, r.output[:200])
     r = await tb.run("web_fetch", {"url": "https://example.com", "max_chars": 400})
     check("web_fetch extracts text", ("Example Domain" in r.output or "documentation examples" in r.output), r.output[:200])
+    r = await tb.run("browser_fetch", {"url": "https://example.com", "max_chars": 400})
+    if "unavailable" in r.output or "failed" in r.output:
+        print(f"  \033[2mskip  browser_fetch renders a page — {r.output[:120]}\033[0m")
+    else:
+        check("browser_fetch renders a page", "Example Domain" in r.output, r.output[:200])
 
 
 # ----------------------------------------------------------------- online

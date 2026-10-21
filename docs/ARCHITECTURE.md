@@ -39,7 +39,7 @@ benefit. All reasoning goes to one local model through **Ollama**.
 |---|---|
 | `supervisor.py` | The control loop. Owns triage, planning, execution, verification, healing, learning, and registration of self-written modules. |
 | `agents.py` | Defines the five agents and `AgentRunner`, the tool loop each agent runs. |
-| `tools.py` | `Toolbox` and the twelve built-in tools. Normalises every result to a string and never raises into the agent loop. |
+| `tools.py` | `Toolbox` and the built-in tools (incl. `browser_fetch`, a sandboxed headless browser for JS pages). Normalises every result to a string and never raises into the agent loop. |
 | `forge.py` | **Skills.** Authors, validates, smoke-tests and registers new Python tools. |
 | `playbooks.py` | **Playbooks.** Authors, validates and registers JSON tool chains. |
 | `policy.py` | Learned routing: a small numpy Q-network that picks the agent and plan/direct mode, trained on rewards. State in `memory/policy.npz`. |
