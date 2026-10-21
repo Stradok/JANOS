@@ -28,7 +28,7 @@ export async function initToken(): Promise<'ok' | 'none' | 'expired'> {
 async function call(path: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
   headers.set('Authorization', `Bearer ${memToken ?? ''}`);
-  if (init.body) headers.set('Content-Type', 'application/json');
+  if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
   const r = await fetch(path, { ...init, headers });
   if (r.status === 401) throw new AuthError('Session token rejected');
   return r;
@@ -111,4 +111,11 @@ export async function speak(text: string): Promise<ArrayBuffer> {
 export async function sendFeedback(episode_id: string, rating: number): Promise<void> {
   const r = await call('/feedback', { method: 'POST', body: JSON.stringify({ episode_id, rating }) });
   if (!r.ok) throw new Error(`/feedback: HTTP ${r.status}`);
+}
+
+/** Speech-to-text: POST the recorded blob as-is; returns the transcript ('' if nothing was heard). */
+export async function transcribe(blob: Blob): Promise<string> {
+  const r = await call('/transcribe', { method: 'POST', headers: { 'Content-Type': blob.type || 'audio/webm' }, body: blob });
+  if (!r.ok) throw new Error(`/transcribe: HTTP ${r.status}`);
+  return String((await r.json()).text ?? '').trim();
 }

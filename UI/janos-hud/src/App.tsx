@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Volume2, VolumeX, Send, Palette, Camera, CameraOff } from 'lucide-react';
+import { Volume2, VolumeX, Send, Palette, Camera, CameraOff, Mic, MicOff } from 'lucide-react';
 import { FragmentedOrbCanvas } from './components/FragmentedOrbCanvas';
 import { CameraPanel } from './components/CameraPanel';
 import { OrbLive, OrbSettings, VisualTheme } from './types';
 import { THEMES } from './utils/themes';
-import { AuthError, getJson, getPersona, setPersona, Health, initToken, sendFeedback, ServerEvent, speak, streamChat, Telemetry } from './api';
+import { AuthError, getJson, getPersona, setPersona, Health, initToken, sendFeedback, ServerEvent, speak, streamChat, Telemetry, transcribe } from './api';
 import { playWav, stopAudio, unlockAudio } from './player';
 
 interface Stage { id: number; kind: string; label: string; detail?: string; bad?: boolean }
@@ -125,12 +125,12 @@ export default function App() {
     setTimeout(() => { if (live.current.mode === 'error') live.current.mode = 'idle'; }, 1200);
   };
 
-  const send = async (greeting = false) => {
-    const text = greeting ? GREETING : input.trim();
+  const send = async (greeting = false, spoken = '') => {
+    const text = greeting ? GREETING : (spoken || input.trim());
     if (!text || busy) return;
     unlockAudio();
     stopAudio();
-    if (!greeting) setInput('');
+    if (!greeting && !spoken) setInput('');
     setBusy(true); setStages([]);
     setMsgs((m) => [...m, greeting ? { who: 'presence', text: '◇ presence detected' } : { who: 'you', text }]);
     live.current.mode = 'thinking'; live.current.pulse = 1;
@@ -182,6 +182,66 @@ export default function App() {
     else if (name === 'Thumb_Down') rate(1, '👎 rated 1 — noted');
   };
 
+  // Push-to-talk: hold the mic button (or Space outside the text box) to record, release to transcribe + send.
+  const sendRef = useRef(send); sendRef.current = send;
+  const sayRef = useRef(say); sayRef.current = say;
+  const stream = useRef<MediaStream | null>(null);
+  const rec = useRef<MediaRecorder | null>(null);
+  const starting = useRef(false);
+  const wantMic = useRef(false);
+  const [listening, setListening] = useState(false);
+
+  const startMic = useCallback(async () => {
+    wantMic.current = true;
+    if (rec.current || starting.current || busyRef.current) return;
+    starting.current = true;
+    try {
+      stream.current ??= await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (!wantMic.current) return;   // released while the permission prompt was open
+      const mt = 'audio/webm;codecs=opus';
+      const r = new MediaRecorder(stream.current, MediaRecorder.isTypeSupported(mt) ? { mimeType: mt } : undefined);
+      const chunks: Blob[] = [];
+      r.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+      r.onstop = async () => {
+        rec.current = null; setListening(false);
+        if (live.current.mode === 'listening') live.current.mode = 'idle';
+        if (!chunks.length) return sayRef.current("didn't catch that");
+        try {
+          const text = await transcribe(new Blob(chunks, { type: r.mimeType }));
+          if (text) void sendRef.current(false, text); else sayRef.current("didn't catch that");
+        } catch (e) {
+          if (e instanceof AuthError) setAuthBad(true); else sayRef.current('speech-to-text unavailable (run make janos-voice-setup)');
+        }
+      };
+      stopAudio();
+      r.start(); rec.current = r; setListening(true); live.current.mode = 'listening';
+    } catch {
+      stream.current = null;
+      sayRef.current('microphone blocked — allow it in the browser');
+    } finally { starting.current = false; }
+  }, []);
+  const stopMic = useCallback(() => {
+    wantMic.current = false;
+    if (rec.current && rec.current.state !== 'inactive') rec.current.stop();
+  }, []);
+  const busyRef = useRef(busy); busyRef.current = busy;
+  useEffect(() => {
+    const typing = () => { const t = document.activeElement?.tagName; return t === 'INPUT' || t === 'TEXTAREA'; };
+    const down = (e: KeyboardEvent) => { if (e.code === 'Space' && !e.repeat && !typing()) { e.preventDefault(); void startMic(); } };
+    const up = (e: KeyboardEvent) => { if (e.code === 'Space') stopMic(); };
+    const hide = () => {
+      if (!document.hidden) return;
+      stopMic(); stream.current?.getTracks().forEach((t) => t.stop()); stream.current = null;
+    };
+    window.addEventListener('keydown', down); window.addEventListener('keyup', up);
+    document.addEventListener('visibilitychange', hide);
+    return () => {
+      window.removeEventListener('keydown', down); window.removeEventListener('keyup', up);
+      document.removeEventListener('visibilitychange', hide);
+      stopMic(); stream.current?.getTracks().forEach((t) => t.stop());
+    };
+  }, [startMic, stopMic]);
+
   if (login === 'wait') return <Center>…</Center>;
   if (login === 'expired') return <Center>Login link expired — run <code className="mx-2">make janos-ui</code> again</Center>;
   if (!token) return <Center>Open JANOS with <code className="mx-2">`make janos-ui`</code></Center>;
@@ -201,6 +261,7 @@ export default function App() {
           <div className="hud-label !opacity-100 text-[11px]" aria-live="polite">● {status}</div>
           <h1 className="text-xl tracking-[.5em] font-light text-[var(--accent)] pl-[.5em]" style={{ textShadow: '0 0 12px var(--accent)' }}>J.A.N.O.S.</h1>
           <div className="flex items-center gap-3 pointer-events-auto">
+            {listening && <span className="text-[11px] tracking-widest text-red-500 motion-safe:animate-pulse" role="status">● LISTENING</span>}
             {camLive && <span className="text-[11px] tracking-widest text-red-500" role="status">● CAMERA</span>}
             <button type="button" className="hud-btn" aria-pressed={camOn} aria-label={camOn ? 'Turn camera off' : 'Turn camera on'}
               onClick={() => setCamOn((c) => !c)}>{camOn ? <Camera size={14} /> : <CameraOff size={14} />}</button>
@@ -271,6 +332,9 @@ export default function App() {
               <button type="submit" className="hud-btn" disabled={busy || !input.trim()} aria-label="Send"><Send size={14} /></button>
               <button type="button" className="hud-btn" aria-pressed={muted} aria-label={muted ? 'Unmute spoken replies' : 'Mute spoken replies'}
                 onClick={() => { setMuted((m) => !m); stopAudio(); }}>{muted ? <VolumeX size={14} /> : <Volume2 size={14} />}</button>
+              <button type="button" className="hud-btn touch-none" aria-pressed={listening} aria-label="Hold to talk"
+                title="Hold to talk (or hold Space)" onPointerDown={() => void startMic()} onPointerUp={stopMic}
+                onPointerLeave={stopMic} onPointerCancel={stopMic}>{listening ? <Mic size={14} /> : <MicOff size={14} />}</button>
               <button type="button" className="hud-btn flex items-center gap-1" aria-label={`Switch theme, now ${theme}`}
                 onClick={toggleTheme}><Palette size={14} />{theme}</button>
             </form>

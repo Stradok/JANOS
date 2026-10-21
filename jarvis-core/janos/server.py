@@ -10,6 +10,7 @@ Endpoints
     POST /feedback          {"episode_id": "...", "rating": 1-5}
     GET  /telemetry         CPU / RAM / GPU for the HUD
     POST /speak             {"text": "..."} -> audio/wav (Kokoro TTS)
+    POST /transcribe        raw audio body (webm/opus or wav) -> {"text": "..."} (faster-whisper)
     POST /login-code        one-time code to open the HUD (POST /auth/session trades it for the token)
     GET  /ui/               the HUD (static; the API routes above still need the token)
     GET  /agents /tools
@@ -24,13 +25,14 @@ import io
 import json
 import os
 import secrets
+import tempfile
 import time
 import wave
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -145,7 +147,7 @@ async def root() -> dict[str, Any]:
         "description": "Local autonomous, self-healing agent system with one supervisor",
         "endpoints": ["/health", "/chat", "/chat/stream", "/feedback", "/agents",
                       "/tools", "/persona", "/memory/stats", "/memory/recent", "/memory/lessons",
-                      "/rankings", "/telemetry", "/speak", "/login-code", "/ui/"],
+                      "/rankings", "/telemetry", "/speak", "/transcribe", "/login-code", "/ui/"],
     }
 
 
@@ -254,6 +256,62 @@ async def speak(body: SpeakIn) -> Response:
     except (ImportError, FileNotFoundError, ValueError, OSError) as e:
         raise HTTPException(503, f"Speech unavailable (run `make janos-voice-setup`): {e}")
     return Response(data, media_type="audio/wav")
+
+
+def _stt():
+    """faster-whisper small.en (same model as janos.voice), loaded on first /transcribe and cached."""
+    if "stt" not in _state:
+        from faster_whisper import WhisperModel
+        root = Config.load().memory_dir / "models" / "whisper"
+        _state["stt"] = WhisperModel("small.en", device="cpu", compute_type="int8",
+                                     download_root=str(root))
+    return _state["stt"]
+
+
+def _decode(path: str):
+    """Any container PyAV can read -> float32 mono 16 kHz. (faster-whisper's own decoder passes an
+    option this PyAV rejects, so decode here.)"""
+    import av
+    import numpy as np
+    rs = av.AudioResampler(format="s16", layout="mono", rate=16000)
+    out = []
+    with av.open(path) as c:
+        for frame in c.decode(audio=0):
+            for f in rs.resample(frame):
+                out.append(f.to_ndarray().reshape(-1))
+        for f in rs.resample(None):
+            out.append(f.to_ndarray().reshape(-1))
+    if not out:
+        return np.zeros(0, dtype=np.float32)
+    return np.concatenate(out).astype(np.float32) / 32768.0
+
+
+def _transcribe(data: bytes) -> str:
+    model = _stt()
+    with tempfile.NamedTemporaryFile(suffix=".audio") as f:   # PyAV sniffs the container, not the name
+        f.write(data)
+        f.flush()
+        audio = _decode(f.name)
+    if audio.size < 1600:   # under 0.1 s: nothing to transcribe
+        return ""
+    segs, _ = model.transcribe(audio, language="en", beam_size=1, vad_filter=True)
+    return " ".join(s.text.strip() for s in segs).strip()
+
+
+@app.post("/transcribe")
+async def transcribe(request: Request) -> dict[str, str]:
+    data = await request.body()
+    if len(data) > 10 * 2**20:
+        raise HTTPException(413, "Audio too large (max 10 MB)")
+    if not data:
+        raise HTTPException(400, "Empty audio")
+    try:
+        text = await asyncio.to_thread(_transcribe, data)
+    except (ImportError, FileNotFoundError) as e:
+        raise HTTPException(503, f"Speech-to-text unavailable (run `make janos-voice-setup`): {e}")
+    except Exception as e:  # undecodable audio from the client
+        raise HTTPException(400, f"Could not decode audio: {e}")
+    return {"text": text}
 
 
 @app.get("/persona")

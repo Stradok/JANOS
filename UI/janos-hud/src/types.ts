@@ -1,6 +1,6 @@
 export type VisualTheme = 'jarvis' | 'ultron';
 
-export type OrbMode = 'idle' | 'thinking' | 'speaking' | 'error';
+export type OrbMode = 'idle' | 'thinking' | 'speaking' | 'listening' | 'error';
 
 /** Live orb drive, mutated by the app every frame-ish; read inside the render loop (no re-render). */
 export interface OrbLive {

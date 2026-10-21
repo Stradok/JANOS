@@ -217,13 +217,14 @@ export const FragmentedOrbCanvas: React.FC<Props> = ({ settings, live }) => {
       lv.pulse = Math.max(0, lv.pulse - dt * 1.8);
       lv.flash = Math.max(0, lv.flash - dt * 1.5);
       const thinking = lv.mode === 'thinking';
-      const speed = (thinking ? 1.8 : 1) * calm;
+      const listening = lv.mode === 'listening';
+      const speed = (thinking ? 1.8 : listening ? 1.5 : 1) * calm;
       time += dt * speed;
       const col = ORB_COLORS[s.theme] ?? ORB_COLORS.jarvis;
       U.uPrimary.value.copy(col.primary).lerp(ERROR_COLOR, lv.flash);
       U.uHot.value.copy(col.hot).lerp(ERROR_COLOR, lv.flash * 0.6);
       const lvl = lv.mode === 'speaking' ? lv.level : 0;
-      U.uGain.value = (0.8 + lv.pulse * 0.6 + lvl * 0.9 + lv.flash * 0.8 + (thinking ? 0.15 : 0)) * (s.reducedMotion ? 0.9 : 1);
+      U.uGain.value = (0.8 + lv.pulse * 0.6 + lvl * 0.9 + lv.flash * 0.8 + (thinking ? 0.15 : listening ? 0.1 : 0)) * (s.reducedMotion ? 0.9 : 1);
       U.uTime.value = time;
       bloom.strength = 0.9 + lvl * 0.5 + lv.flash * 0.6;
 

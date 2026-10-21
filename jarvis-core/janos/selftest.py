@@ -655,6 +655,17 @@ def test_server_security() -> None:
     code = c.post("/login-code", headers=auth).json()["code"]
     srv._codes[code] = 0.0
     check("login code expires", c.post("/auth/session", json={"code": code}).status_code == 401)
+    check("/transcribe refuses requests without a token",
+          c.post("/transcribe", content=b"x").status_code == 401)
+    real = Path(__file__).resolve().parents[1] / "memory" / "models"
+    if (real / "whisper").exists() and (real / "kokoro-v1.0.int8.onnx").exists():
+        (Config.load().memory_dir / "models").symlink_to(real)   # reuse the cached models in the temp memory dir
+        srv._state.pop("tts", None); srv._state.pop("stt", None)
+        r = c.post("/transcribe", content=srv._wav("testing one two three", "jarvis"),
+                   headers={**auth, "Content-Type": "audio/wav"})
+        check("speech-to-text endpoint round-trips",
+              r.status_code == 200 and "test" in r.json()["text"].lower(), r.text[:80])
+        srv._state.pop("tts", None); srv._state.pop("stt", None)
     if saved is None:
         os.environ.pop("JANOS_MEMORY_DIR", None)
     else:
