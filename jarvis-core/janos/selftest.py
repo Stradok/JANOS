@@ -634,6 +634,10 @@ def test_server_security() -> None:
         r = c.get("/ui/")
         check("HUD page loads without a token",
               r.status_code == 200 and "html" in r.headers.get("content-type", ""), str(r.status_code))
+    model = Path(__file__).parent / "ui_dist" / "mediapipe" / "models" / "face_landmarker.task"
+    if model.exists():
+        check("HUD vision assets are served locally",
+              c.get("/ui/mediapipe/models/face_landmarker.task").status_code == 200)
     check("API still refuses requests without a token",
           c.get("/telemetry").status_code == 401 and c.post("/speak", json={"text": "hi"}).status_code == 401)
     t = c.get("/telemetry", headers={"Authorization": f"Bearer {tok}"})
@@ -699,7 +703,36 @@ async def test_employee_git_hijack() -> None:
     check("employee: a planted .git hook never runs on the host",
           not marker.exists() and r.changed == ["work.txt"] and count(r.branch) == "2" and count("main") == "1",
           f"hook ran={marker.exists()} changed={r.changed[:3]} err={r.error[:80]}")
+
+    # A repo carrying a filter driver / sshCommand would run code during
+    # `git worktree add` on the host. Such a repo must be refused.
+    from janos.employee import _repo_is_safe
+    subprocess.run(["git", "-C", str(repo), "config", "filter.x.clean", "touch /tmp/pwn"], check=True, capture_output=True)
+    refused = await _repo_is_safe(repo)
+    clean_repo = tmp / "clean"; clean_repo.mkdir()
+    subprocess.run(["git", "-C", str(clean_repo), "init", "-q"], check=True, capture_output=True)
+    allowed = await _repo_is_safe(clean_repo)
+    check("employee refuses a repo whose config can run code",
+          "filter.x.clean" in refused and allowed == "", f"refused={refused!r} allowed={allowed!r}")
     shutil.rmtree(tmp, ignore_errors=True)
+
+
+async def test_worker_sandbox() -> None:
+    section("Worker sandbox")
+    from janos import sandbox
+    if not sandbox.available():
+        check("worker profile isolates the process table", False, "bubblewrap missing")
+        return
+    cfg = Config.load()
+    def procs(profile, wd=None):
+        pre = sandbox.prefix(cfg, profile, workdir=wd)
+        out = subprocess.run(pre + ["bash", "-c", "ls /proc | grep -c '^[0-9]'"],
+                             capture_output=True, text=True, timeout=30).stdout
+        return int(out.strip() or 0)
+    observe = procs("observe")
+    worker = procs("worker", Path(tempfile.mkdtemp()))
+    check("worker profile isolates the process table", worker <= 5 and observe > 20,
+          f"observe={observe} worker={worker}")
 
 
 async def test_employee_offline() -> None:
@@ -784,6 +817,7 @@ async def main_async() -> int:
     test_policy()
     await test_employee_offline()
     await test_employee_git_hijack()
+    await test_worker_sandbox()
 
     if not args.offline:
         await test_network()

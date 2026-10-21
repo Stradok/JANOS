@@ -1,13 +1,15 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Volume2, VolumeX, Send, Palette } from 'lucide-react';
+import { Volume2, VolumeX, Send, Palette, Camera, CameraOff } from 'lucide-react';
 import { FragmentedOrbCanvas } from './components/FragmentedOrbCanvas';
+import { CameraPanel } from './components/CameraPanel';
 import { OrbLive, OrbSettings, VisualTheme } from './types';
 import { THEMES } from './utils/themes';
-import { AuthError, getJson, Health, initToken, ServerEvent, speak, streamChat, Telemetry } from './api';
+import { AuthError, getJson, Health, initToken, sendFeedback, ServerEvent, speak, streamChat, Telemetry } from './api';
 import { playWav, stopAudio, unlockAudio } from './player';
 
 interface Stage { id: number; kind: string; label: string; detail?: string; bad?: boolean }
-interface Msg { who: 'you' | 'janos' | 'sys'; text: string }
+interface Msg { who: 'you' | 'janos' | 'sys' | 'presence'; text: string }
+const GREETING = 'The user just sat down in front of you. Greet them briefly by time of day, in one sentence.';
 
 const lsGet = (k: string) => { try { return localStorage.getItem(k); } catch { return null; } };
 const lsSet = (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* private mode */ } };
@@ -65,6 +67,9 @@ export default function App() {
   const [authBad, setAuthBad] = useState(false);
   const [theme, setTheme] = useState<VisualTheme>(() => (lsGet('janos_theme') === 'ultron' ? 'ultron' : 'jarvis'));
   const [muted, setMuted] = useState(() => lsGet('janos_muted') === '1');
+  const [camOn, setCamOn] = useState(() => lsGet('janos_camera') === '1');
+  const [camLive, setCamLive] = useState(false);
+  const [toast, setToast] = useState('');
   const [reduced] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches);
   const [tele, setTele] = useState<Telemetry | null>(null);
   const [health, setHealth] = useState<Health | null>(null);
@@ -74,7 +79,9 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [input, setInput] = useState('');
   const [now, setNow] = useState(new Date());
-  const live = useRef<OrbLive>({ mode: 'idle', level: 0, pulse: 0, flash: 0 });
+  const live = useRef<OrbLive>({ mode: 'idle', level: 0, pulse: 0, flash: 0, look: { x: 0, y: 0 } });
+  const lastEp = useRef('');
+  const toastT = useRef(0);
   const abort = useRef<AbortController | null>(null);
   const stageId = useRef(0);
   const logEnd = useRef<HTMLDivElement>(null);
@@ -86,6 +93,7 @@ export default function App() {
     document.documentElement.style.setProperty('--accent', THEMES[theme].accent);
     lsSet('janos_theme', theme);
   }, [theme]);
+  useEffect(() => lsSet('janos_camera', camOn ? '1' : '0'), [camOn]);
   useEffect(() => lsSet('janos_muted', muted ? '1' : '0'), [muted]);
   useEffect(() => { const t = setInterval(() => setNow(new Date()), 1000); return () => clearInterval(t); }, []);
   useEffect(() => { logEnd.current?.scrollIntoView({ block: 'end' }); }, [msgs]);
@@ -112,20 +120,21 @@ export default function App() {
     setTimeout(() => { if (live.current.mode === 'error') live.current.mode = 'idle'; }, 1200);
   };
 
-  const send = async () => {
-    const text = input.trim();
+  const send = async (greeting = false) => {
+    const text = greeting ? GREETING : input.trim();
     if (!text || busy) return;
     unlockAudio();
     stopAudio();
-    setInput(''); setBusy(true); setStages([]);
-    setMsgs((m) => [...m, { who: 'you', text }]);
+    if (!greeting) setInput('');
+    setBusy(true); setStages([]);
+    setMsgs((m) => [...m, greeting ? { who: 'presence', text: '◇ presence detected' } : { who: 'you', text }]);
     live.current.mode = 'thinking'; live.current.pulse = 1;
     const ac = new AbortController(); abort.current = ac;
     let answer = '', failed = false;
     try {
       await streamChat(text, (e) => {
         live.current.pulse = 1;
-        if (e.type === 'result') { answer = String(e.answer ?? ''); return; }
+        if (e.type === 'result') { answer = String(e.answer ?? ''); lastEp.current = String(e.episode_id ?? ''); return; }
         if (e.type === 'error') { failed = true; fail(String(e.error)); return; }
         const s = toStage(e);
         if (s) setStages((p) => [...p.slice(-59), { id: ++stageId.current, ...s }]);
@@ -153,6 +162,21 @@ export default function App() {
 
   useEffect(() => () => abort.current?.abort(), []);
 
+  const say = (t: string) => { setToast(t); clearTimeout(toastT.current); toastT.current = window.setTimeout(() => setToast(''), 2500); };
+  const rate = (rating: number, done: string) => {
+    if (!lastEp.current) return say('no answer to rate');
+    say(done);
+    sendFeedback(lastEp.current, rating).catch((e) => { if (e instanceof AuthError) setAuthBad(true); else say('rating failed'); });
+  };
+  const onGesture = (name: string) => {
+    if (name === 'Open_Palm') {
+      stopAudio();
+      if (live.current.mode === 'speaking') live.current.mode = 'idle';
+      say('✋ stopped');
+    } else if (name === 'Thumb_Up') rate(5, '👍 rated 5 — thanks');
+    else if (name === 'Thumb_Down') rate(1, '👎 rated 1 — noted');
+  };
+
   if (login === 'wait') return <Center>…</Center>;
   if (login === 'expired') return <Center>Login link expired — run <code className="mx-2">make janos-ui</code> again</Center>;
   if (!token) return <Center>Open JANOS with <code className="mx-2">`make janos-ui`</code></Center>;
@@ -172,13 +196,19 @@ export default function App() {
           <div className="hud-label !opacity-100 text-[11px]" aria-live="polite">● {status}</div>
           <h1 className="text-xl tracking-[.5em] font-light text-[var(--accent)] pl-[.5em]" style={{ textShadow: '0 0 12px var(--accent)' }}>J.A.N.O.S.</h1>
           <div className="flex items-center gap-3 pointer-events-auto">
+            {camLive && <span className="text-[11px] tracking-widest text-red-500" role="status">● CAMERA</span>}
+            <button type="button" className="hud-btn" aria-pressed={camOn} aria-label={camOn ? 'Turn camera off' : 'Turn camera on'}
+              onClick={() => setCamOn((c) => !c)}>{camOn ? <Camera size={14} /> : <CameraOff size={14} />}</button>
             <time className="hud-label !opacity-100 text-[11px]">{now.toLocaleTimeString([], { hour12: false })}</time>
           </div>
         </header>
 
+        {toast && <div className="absolute top-14 left-1/2 -translate-x-1/2 hud-panel text-[12px] text-[var(--accent)]" role="status">{toast}</div>}
+
         {/* middle */}
         <div className="flex-1 min-h-0 flex justify-between gap-4">
-          <Panel title="Telemetry" className="w-64 self-start pointer-events-auto">
+          <div className="self-start flex flex-col gap-3">
+          <Panel title="Telemetry" className="w-64 pointer-events-auto">
             <Meter label="CPU" value={tele?.cpu_percent ?? 0} text={tele ? `${tele.cpu_percent.toFixed(0)}%` : '—'} />
             <Meter label="RAM" value={tele ? (tele.ram_used_gb / tele.ram_total_gb) * 100 : 0}
               text={tele ? `${tele.ram_used_gb.toFixed(1)} / ${tele.ram_total_gb.toFixed(1)} GB` : '—'} />
@@ -196,6 +226,11 @@ export default function App() {
                 : `${pol.updates} upd · r ${pol.recent_reward.toFixed(2)} · ovr ${(pol.override_rate * 100).toFixed(0)}%`}</div>
             </div>
           </Panel>
+        {camOn && (
+            <CameraPanel live={live} onLive={setCamLive} onGreet={() => void send(true)} onGesture={onGesture}
+              onError={(t) => { setCamOn(false); setMsgs((m) => [...m, { who: 'sys', text: t }]); }} />
+        )}
+          </div>
 
           <Panel title="Pipeline" className="w-80 self-start max-h-full flex flex-col pointer-events-auto">
             <ol className="overflow-y-auto thin-scroll text-[11px] space-y-1.5 min-h-[3rem]" aria-live="polite">
@@ -218,8 +253,8 @@ export default function App() {
               {msgs.length === 0 && <div className="hud-dim">Awaiting input.</div>}
               {msgs.map((m, i) => (
                 <div key={i} className={m.who === 'sys' ? 'text-red-400' : ''}>
-                  <span className="hud-label mr-2">{m.who === 'you' ? 'YOU' : m.who === 'janos' ? 'JANOS' : 'SYS'}</span>
-                  <span className={m.who === 'you' ? 'hud-dim' : ''}>{m.text}</span>
+                  <span className="hud-label mr-2">{m.who === 'you' ? 'YOU' : m.who === 'janos' ? 'JANOS' : m.who === 'presence' ? '' : 'SYS'}</span>
+                  <span className={m.who === 'you' || m.who === 'presence' ? 'hud-dim' : ''}>{m.text}</span>
                 </div>
               ))}
               <div ref={logEnd} />

@@ -87,6 +87,42 @@ async def _exec(argv: list[str], timeout: float, cwd: Path | None = None,
     return proc.returncode or 0, out.decode("utf-8", "replace")
 
 
+# Config that can execute a program during an ordinary git operation. Our own
+# -c flags override the first three even if the repo sets them, but filter
+# drivers, ssh commands and include files have no override, so a repo carrying
+# any of them is refused rather than trusted.
+_GIT_ENV = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_TERMINAL_PROMPT": "0"}
+_GIT_SAFE = ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
+             "-c", "protocol.ext.allow=never", "-c", "core.sshCommand=false"]
+_GIT_DANGER = re.compile(r"^(filter\.|core\.sshcommand|core\.hookspath|core\.fsmonitor"
+                         r"|include\.|includeif|.*\.sshcommand=|diff\..*\.command|.*\.textconv)",
+                         re.IGNORECASE)
+
+
+async def _repo_is_safe(repo: Path) -> str:
+    """Empty string if the repo has no code-executing config, else why it is refused.
+
+    A repo under the workspace could have been written by a sandboxed tool, so
+    its committed `.git/config` (and anything it includes) is untrusted input to
+    the host git that worktree-add runs.
+    """
+    code, out = await _exec([*_GIT_SAFE, "-C", str(repo), "config", "--list",
+                             "--show-origin"], 15, env=_GIT_ENV)
+    if code:
+        return ""   # not listable (fresh repo): nothing dangerous to find
+    for line in out.splitlines():
+        origin, _, rest = line.partition("\t")
+        # Only the repo's own config files are untrusted; skip our own
+        # command-line -c flags and anything from a safe origin.
+        if not origin.startswith(("file:", "blob:", "includeif:")):
+            continue
+        key = rest.split("=", 1)[0].strip()
+        if _GIT_DANGER.match(key):
+            return f"repo config sets {key!r}, which can run code on the host"
+    return ""
+
+
 class Employee:
     def __init__(self, config: Config, repo: Path):
         self.config = config
@@ -109,12 +145,10 @@ class Employee:
         file, and could replace it with a directory holding its own config and
         hooks; a plain `git -C worktree commit` on the host would then run that
         code unsandboxed. So the real gitdir (recorded before the agent ran) is
-        named explicitly, and hooks, fsmonitor, global and system config are off.
+        named explicitly, and every code-executing config vector is disabled.
         """
-        env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
-        return _exec(["git", f"--git-dir={self._gitdirs[path]}", f"--work-tree={path}",
-                      "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", *args],
-                     timeout, cwd=path, env=env)
+        return _exec([*_GIT_SAFE, f"--git-dir={self._gitdirs[path]}", f"--work-tree={path}", *args],
+                     timeout, cwd=path, env=_GIT_ENV)
 
     async def _agent(self, binary: str, path: Path, prompt: str, model: str,
                      timeout: int, plan: bool = False) -> tuple[int, str]:
@@ -148,9 +182,13 @@ class Employee:
             if not binary or not Path(binary).exists():
                 r.error = "coding CLI not found"
                 return r
+            unsafe = await _repo_is_safe(self.repo)
+            if unsafe:
+                r.error = f"refusing repo: {unsafe}"
+                return r
             path.parent.mkdir(parents=True, exist_ok=True)
-            code, out = await _exec(["git", "-C", str(self.repo), "worktree", "add", "-b", branch,
-                                     str(path), "HEAD"], 60)
+            code, out = await _exec([*_GIT_SAFE, "-C", str(self.repo), "worktree", "add",
+                                     "-b", branch, str(path), "HEAD"], 60, env=_GIT_ENV)
             if code:
                 r.error = f"worktree failed: {out[-300:]}"
                 return r
@@ -208,8 +246,8 @@ class Employee:
     def cleanup(self, result: Result) -> None:
         """Remove the worktree; the branch stays for the human."""
         import subprocess
-        subprocess.run(["git", "-C", str(self.repo), "worktree", "remove", "--force", result.worktree],
-                       capture_output=True)
+        subprocess.run([*_GIT_SAFE, "-C", str(self.repo), "worktree", "remove", "--force",
+                        result.worktree], capture_output=True, env=_GIT_ENV)
 
 
 def main() -> int:

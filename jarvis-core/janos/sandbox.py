@@ -94,8 +94,12 @@ def prefix(config: Config, profile: str, *, network: bool = False,
         # Own PID namespace with the host's /proc bound read-only: `ps` and `top`
         # still list every host process, but kill() resolves PIDs in the
         # sandbox's namespace, so host processes cannot be signalled.
+        # observe binds the host /proc read-only so the operator's `ps`/`top` see
+        # the machine; the worker (untrusted coding agent, has network) has no
+        # such need, so it gets a private /proc showing only its own tree.
+        host_proc = ["--ro-bind", "/proc", "/proc"] if profile == "observe" else ["--proc", "/proc"]
         args = ["bwrap", "--ro-bind", "/", "/", "--dev", "/dev", *gpu,
-                "--unshare-pid", "--ro-bind", "/proc", "/proc",
+                "--unshare-pid", *host_proc,
                 "--tmpfs", "/run", "--ro-bind-try", "/run/systemd/resolve", "/run/systemd/resolve",
                 "--tmpfs", home, "--unshare-ipc",
                 # A shared network namespace also shares abstract sockets (X11)

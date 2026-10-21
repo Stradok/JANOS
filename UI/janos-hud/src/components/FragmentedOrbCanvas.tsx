@@ -318,6 +318,7 @@ export const FragmentedOrbCanvas: React.FC<Props> = ({ settings, live }) => {
 
     // --- Main Animation Loop ---
     let lastTime = performance.now();
+    let lookX = 0, lookY = 0;
 
     const animate = (now: number) => {
       animationFrameRef.current = requestAnimationFrame(animate);
@@ -382,6 +383,12 @@ export const FragmentedOrbCanvas: React.FC<Props> = ({ settings, live }) => {
       const globalSlowTurn = t * 0.12;
       shellGroup.rotation.y = globalSlowTurn;
       shellGroup.rotation.x = Math.sin(t * 0.08) * 0.12;
+      // Look at the user: ease toward the face (max ~0.25 rad); stay centred under reduced motion.
+      const lk = currentSettings.reducedMotion ? { x: 0, y: 0 } : lv.look;
+      const ease = Math.min(1, delta * 3);
+      lookX += (lk.x - lookX) * ease; lookY += (lk.y - lookY) * ease;
+      shellGroup.rotation.y += lookX * 0.25;
+      shellGroup.rotation.x += lookY * 0.25;
 
       for (let i = 0; i < fragments.length; i++) {
         const frag: FragmentMeshInstance = fragments[i];

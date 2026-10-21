@@ -8,6 +8,7 @@ export interface OrbLive {
   level: number;  // 0..1 audio amplitude while speaking
   pulse: number;  // 0..1, set to 1 on each pipeline event, decays in the orb
   flash: number;  // 0..1, set to 1 on error, decays in the orb
+  look: { x: number; y: number };  // -1..1 face position (mirrored); {0,0} = no face
 }
 
 export interface OrbSettings {

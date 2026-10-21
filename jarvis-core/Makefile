@@ -83,9 +83,9 @@ janos-ui-build: ## JANOS: build the HUD (needs Node)
 janos-ui: _janos-check ## JANOS: open the HUD in your browser
 	@test -f janos/ui_dist/index.html || $(MAKE) janos-ui-build
 	@( for i in $$(seq 1 150); do \
-	     CODE=$$($(JPY) -c "import httpx,pathlib;t=pathlib.Path('$(MEMORY)/api_token').read_text().strip();print(httpx.post('http://127.0.0.1:$(PORT)/login-code',headers={'Authorization':'Bearer '+t}).json()['code'])" 2>/dev/null) && break; \
-	     CODE=; sleep 0.1; done; \
-	   test -n "$$CODE" && xdg-open "http://127.0.0.1:$(PORT)/ui/#code=$$CODE" >/dev/null 2>&1 ) &
+	     LAUNCH=$$($(JPY) janos/launch_ui.py "$(MEMORY)" "$(PORT)" 2>/dev/null) && break; \
+	     LAUNCH=; sleep 0.1; done; \
+	   test -n "$$LAUNCH" && xdg-open "$$LAUNCH" >/dev/null 2>&1 ) &
 	@$(JVENV)/bin/uvicorn janos.server:app --host $(JANOS_HOST) --port $(PORT)
 
 janos-test: _janos-check ## JANOS: self-test — add OFFLINE=1 to skip model/network

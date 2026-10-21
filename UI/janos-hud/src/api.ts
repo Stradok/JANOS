@@ -86,3 +86,9 @@ export async function speak(text: string): Promise<ArrayBuffer> {
   if (!r.ok) throw new Error(`/speak: HTTP ${r.status}`);
   return r.arrayBuffer();
 }
+
+/** Rate an answer 1-5 (the only thing the camera features ever send besides chat text). */
+export async function sendFeedback(episode_id: string, rating: number): Promise<void> {
+  const r = await call('/feedback', { method: 'POST', body: JSON.stringify({ episode_id, rating }) });
+  if (!r.ok) throw new Error(`/feedback: HTTP ${r.status}`);
+}
