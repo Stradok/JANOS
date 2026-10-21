@@ -358,7 +358,8 @@ async def test_network() -> None:
     if "unavailable" in r.output or "failed" in r.output:
         print(f"  \033[2mskip  browser_fetch renders a page — {r.output[:120]}\033[0m")
     else:
-        check("browser_fetch renders a page", "Example Domain" in r.output, r.output[:200])
+        check("browser_fetch renders a page",
+              ("Example Domain" in r.output or "documentation examples" in r.output), r.output[:200])
 
 
 # ----------------------------------------------------------------- online

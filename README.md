@@ -52,7 +52,7 @@ cd jarvis-core
 make janos-setup              # creates .venv, installs dependencies, pulls the model
 make janos                    # interactive REPL
 make janos-ask Q="how much VRAM is my GPU using?"
-make janos-test               # self-test (142 checks)
+make janos-test               # self-test (143 checks)
 ```
 
 Other entry points:

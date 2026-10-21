@@ -473,9 +473,16 @@ class Toolbox:
                 except ValueError:
                     ok = False
                 if ok and ru.hostname != host:
-                    # Not the pinned host: re-validate by resolved IP on every request (no cache).
-                    # ponytail: Chromium re-resolves these itself, so a rebinding race remains for third-party hosts.
-                    ok = not (await _resolve_public(ru.hostname))[1]
+                    # A navigation (including a redirect) to any other host is refused
+                    # outright — only the one host we pinned to a validated IP may be
+                    # navigated to. Subresources to other hosts (CDN JS/CSS) are allowed
+                    # only if they still resolve public.
+                    # ponytail: Chromium re-resolves third-party subresource hosts itself,
+                    # so a narrow rebinding race remains for them (not the pinned host).
+                    if req.is_navigation_request():
+                        ok = False
+                    else:
+                        ok = not (await _resolve_public(ru.hostname))[1]
                 if ok:
                     await route.continue_()
                 else:
@@ -498,9 +505,14 @@ class Toolbox:
                             user_agent=("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
                                         "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"),
                             java_script_enabled=True, service_workers="block", accept_downloads=False)
-                        page = await ctx.new_page()
-                        await page.route("**/*", gate)
-                        await page.route_web_socket("**/*", lambda ws: ws.close())
+                        # Gate the whole context, so every page, popup and worker it spawns
+                        # is filtered — a page-level route misses pop-ups opened by script.
+                        await ctx.route("**/*", gate)
+                        await ctx.route_web_socket("**/*", lambda ws: ws.close())
+                        await ctx.add_init_script("window.open = () => null;")
+                        main = await ctx.new_page()
+                        ctx.on("page", lambda pg: pg is not main and asyncio.create_task(pg.close()))
+                        page = main
                         await page.goto(url, wait_until="domcontentloaded", timeout=15000)
                         await page.wait_for_timeout(min(max(wait_ms, 0), 5000))
                         return await page.evaluate("document.body ? document.body.innerText : ''")
