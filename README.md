@@ -42,7 +42,7 @@ request ─► recall ─► triage ─► plan ─► delegate ─► verify �
 | OS | Linux (developed on Ubuntu) |
 | Python | 3.14 (developed on 3.14.4) |
 | LLM runtime | [Ollama](https://ollama.com), running on `localhost:11434` |
-| Model | `qwen2.5:7b-instruct` (about 4.7 GB) |
+| Model | `qwen2.5:3b-instruct` (about 1.9 GB; `qwen2.5:7b-instruct` for higher quality) |
 | GPU | 8 GB VRAM recommended; the model uses about 5.5 GB. CPU works but is slow. |
 
 ## Quick start
@@ -52,7 +52,7 @@ cd jarvis-core
 make janos-setup              # creates .venv, installs dependencies, pulls the model
 make janos                    # interactive REPL
 make janos-ask Q="how much VRAM is my GPU using?"
-make janos-test               # self-test (113 checks)
+make janos-test               # self-test (141 checks)
 ```
 
 Other entry points:
@@ -134,7 +134,8 @@ Settings live in `jarvis-core/janos.yaml`; any value can be overridden with a
 
 | Key | Default | Meaning |
 |---|---|---|
-| `model` | `qwen2.5:7b-instruct` | the one model used for everything |
+| `model` | `qwen2.5:3b-instruct` | the brain; small and fast (7B for higher quality) |
+| `fast_verify` | true | skip the critic+heal when guards pass and tools ran clean (speed) |
 | `max_steps` | 8 | most plan steps per request |
 | `max_heal_attempts` | 2 | retries after a failed verification |
 | `min_pass_score` | 0.6 | verification score needed to accept an answer |

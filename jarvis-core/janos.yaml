@@ -12,7 +12,7 @@
 #   ollama pull qwen2.5:7b-instruct
 #
 # Smaller GPU? qwen2.5:3b-instruct. More VRAM? qwen2.5:14b-instruct.
-model: qwen2.5:7b-instruct
+model: qwen2.5:3b-instruct   # small & fast; qwen2.5:7b-instruct for higher quality
 ollama_url: http://localhost:11434
 timeout: 180
 keep_alive: 30m        # keep the model in VRAM between requests (Ollama default is 5m)
@@ -24,6 +24,7 @@ max_steps: 8           # most plan steps the supervisor will run
 max_heal_attempts: 2   # retries after a failed verification
 agent_max_turns: 6     # tool-loop turns inside one agent
 min_pass_score: 0.6    # verification score needed to accept an answer
+fast_verify: true      # skip the critic+heal when guards pass and tools ran clean (speed)
 
 # --- Memory and learning ----------------------------------------------
 recall_k: 4            # past episodes injected as context

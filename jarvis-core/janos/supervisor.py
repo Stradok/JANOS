@@ -688,6 +688,15 @@ Rules:
                 for c in tool_calls[-8:]
             )
 
+        # Fast path: deterministic guards clean, and the answer is grounded in
+        # tools that all ran without error. The critic almost never overturns
+        # this, and its call plus any heal retry are most of the latency — so
+        # accept directly. Knowledge-only answers (no tool) and anything with a
+        # maths, file or execution problem still go to the critic below.
+        if (self.config.fast_verify and not bad_maths and not missing and not errors
+                and tool_calls and all(c.get("ok") for c in tool_calls)):
+            return {"score": 0.9, "ok": True, "issues": [], "fix": "", "fast": True}
+
         prompt = f"""Judge whether this answer genuinely satisfies the request.
 
 REQUEST: {task}

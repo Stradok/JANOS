@@ -37,7 +37,7 @@ def _env(key: str, default: Any) -> Any:
 @dataclass
 class Config:
     # --- LLM: exactly one model for the whole system ---
-    model: str = "qwen2.5:7b-instruct"
+    model: str = "qwen2.5:3b-instruct"
     ollama_url: str = "http://localhost:11434"
     timeout: int = 180
     keep_alive: str = "30m"     # how long Ollama keeps the model in VRAM after a call
@@ -51,6 +51,7 @@ class Config:
     max_heal_attempts: int = 2  # self-heal retries after a failed verification
     agent_max_turns: int = 6    # tool-loop turns inside a single agent
     min_pass_score: float = 0.6 # verification score needed to accept a result
+    fast_verify: bool = True    # accept directly when guards pass and tools ran clean (skip critic+heal)
 
     # --- Memory / learning ---
     memory_dir: Path = field(default_factory=lambda: ROOT / "memory")
@@ -89,7 +90,7 @@ class Config:
             setattr(self, f, _env(f, getattr(self, f)))
         for f in ("temperature", "min_pass_score", "wake_threshold", "rl_explore", "rl_explore_auto"):
             setattr(self, f, _env(f, getattr(self, f)))
-        for f in ("learn", "allow_shell", "sandbox", "shell_network", "rl_policy"):
+        for f in ("learn", "allow_shell", "sandbox", "shell_network", "rl_policy", "fast_verify"):
             setattr(self, f, _env(f, getattr(self, f)))
 
         key = os.environ.get("JANOS_BRAVE_API_KEY") or os.environ.get("BRAVE_API_KEY") or ""

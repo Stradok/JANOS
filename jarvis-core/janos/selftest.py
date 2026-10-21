@@ -119,6 +119,32 @@ def test_arithmetic() -> None:
           str([t for t in right if check_arithmetic(t)]))
 
 
+async def test_fast_verify() -> None:
+    section("Fast verification")
+    from janos.supervisor import Supervisor
+    sup = Supervisor(Config.load())
+    called = {"n": 0}
+    async def boom(*a, **k): raise AssertionError("critic ran on the fast path")
+    async def rubber_stamp(*a, **k):
+        called["n"] += 1
+        return {"score": 1.0, "ok": True, "issues": [], "fix": ""}
+    good_tools = [{"tool": "system_info", "args": {}, "ok": True, "output": "Disk: 10 GiB free"}]
+    # Clean tool-grounded answer: the critic must not be consulted at all.
+    sup.llm.chat_json = boom
+    v = await sup._verify("how much disk", "You have 10 GiB free.", [], good_tools)
+    check("fast path accepts a clean tool-grounded answer without the critic",
+          v["ok"] and v.get("fast") and v["score"] >= 0.6, str(v))
+    # Bad arithmetic: the critic runs but the guard overrules its passing score.
+    sup.llm.chat_json = rubber_stamp
+    bad = await sup._verify("stats", "5679 of 8188 is 95 percent.", [], good_tools)
+    check("a bad number still fails even when the critic approves",
+          not bad["ok"] and bad["score"] <= 0.4 and called["n"] == 1, str(bad))
+    # A failed tool is not a fast accept: the critic must be consulted.
+    await sup._verify("x", "done", [], [{"tool": "shell", "args": {}, "ok": False, "output": "err"}])
+    check("fast path skipped when a tool failed", called["n"] == 2)
+    sup.close()
+
+
 def test_capability_guard() -> None:
     section("Capability guard")
     s = Supervisor.__new__(Supervisor)  # pure helper, no LLM needed
@@ -859,6 +885,7 @@ async def main_async() -> int:
     test_config()
     test_memory()
     test_arithmetic()
+    await test_fast_verify()
     test_capability_guard()
     test_forge_validation()
     test_server_security()
