@@ -111,6 +111,9 @@ class LLM:
             "messages": messages,
             "stream": False,
             "options": options,
+            # Ollama unloads after 5 idle minutes by default; reloading costs
+            # several seconds, which a spoken conversation cannot hide.
+            "keep_alive": self.config.keep_alive,
         }
         if fmt is not None:
             payload["format"] = fmt

@@ -400,6 +400,9 @@ async def test_sandbox() -> None:
         f"cat /proc/{me}/environ >/dev/null 2>&1 && echo OP''EN:environ; echo E''ND"})   # split markers: the command is echoed back
     check("shell cannot reach host processes via /proc",
           "OPEN:" not in r.output and r.output.strip().endswith("END"), r.output.splitlines()[-1])
+    r = await tb.run("shell", {"command": f"kill -0 {me} 2>/dev/null && echo SIGNAL || echo NOSIGNAL"})
+    check("shell cannot signal host processes", r.output.strip().splitlines()[-1] == "NOSIGNAL",
+          r.output.strip().splitlines()[-1])
     probe = Path("/dev/shm/janos_selftest_probe")
     await tb.run("shell", {"command": f"touch {probe}"})
     check("shell /dev/shm is private", not probe.exists())
@@ -437,6 +440,167 @@ async def test_playbooks() -> None:
     forge = PlaybookForge(Config.load(), None, tb)  # type: ignore[arg-type]
     out = await forge.execute(good, {})
     check("playbook chains steps", out.strip() == "2+2 = 4 | 3*3 = 9", out)
+
+
+async def test_voice() -> None:
+    try:
+        import faster_whisper, kokoro_onnx, openwakeword  # noqa: F401
+        import numpy as np
+        from janos.voice import FRAME, SR, Endpointer, Voice, _plain, to_16k
+        cfg = Config.load()
+        if not (cfg.memory_dir / "models" / "kokoro-v1.0.int8.onnx").exists():
+            raise ImportError("kokoro model missing")
+    except ImportError:
+        print("\n\033[2m\033[33mskipping voice checks — run make janos-voice-setup\033[0m")
+        return
+    section("Voice (offline)")
+    voice = Voice(cfg)
+    i16 = lambda a: (np.clip(a, -1, 1) * 32767).astype(np.int16)
+    sil = lambda s: np.zeros(int(s * SR), np.float32)
+    say = lambda t: to_16k(*voice.synth(t))
+    frames = lambda a: [i16(a)[i:i + FRAME] for i in range(0, len(a) - FRAME + 1, FRAME)]
+
+    def peak(text: str) -> float:
+        path = next(p for p in openwakeword.get_pretrained_model_paths() if "hey_jarvis" in p)
+        m = openwakeword.Model(wakeword_model_paths=[path])
+        return max(max(m.predict(f).values()) for f in frames(np.concatenate([sil(1), say(text), sil(1)])))
+
+    audio, sr = voice.synth("Hello there, this is a test of the speech system.")
+    amp = float(np.abs(audio).max())
+    check("TTS produces speech", len(audio) / sr > 0.5 and amp > 0.05, f"{len(audio) / sr:.2f}s peak {amp:.3f}")
+    p = peak("Hey Jarvis, what time is it?")
+    check("wake word fires on 'hey jarvis'", p >= 0.5, f"peak {p:.2f}")
+    p = peak("Good morning, how was your weekend?")
+    check("wake word ignores other speech", p < 0.5, f"peak {p:.2f}")
+
+    speech = say("Open the pod bay doors please.")
+    ep, fed, stopped = Endpointer(), 0, False
+    for f in frames(np.concatenate([speech, sil(2)])):
+        fed += len(f)
+        if stopped := ep.feed(f):
+            break
+    late = (fed - len(speech)) / SR
+    check("endpointer stops after speech ends", stopped and ep.has_speech and late <= 1.6,
+          f"stopped={stopped} speech={ep.has_speech} {late:.2f}s after end")
+    quiet = Endpointer()
+    n = next((k for k, f in enumerate(frames(sil(10)), 1) if quiet.feed(f)), None)
+    check("endpointer gives up on silence", n is not None and not quiet.has_speech and n * FRAME / SR <= 7,
+          f"frames={n} speech={quiet.has_speech}")
+    heard = voice.transcribe(ep.audio()).lower()
+    check("speech-to-text round trip", "pod" in heard and "doors" in heard, heard)
+    out = _plain("**Done.** See https://x.io `code` # Title")
+    check("spoken text has no markdown or URLs", not any(c in out for c in ("*", "`", "#", "http")), out)
+
+    async def _boom(_):
+        raise RuntimeError("tool crashed")
+    said = []
+    voice.respond, voice.speak = _boom, said.append
+    try:
+        await voice._turn("open the pod bay doors")
+        survived = True
+    except Exception:
+        survived = False
+    check("voice turn survives a failing request", survived and said and "sorry" in said[0].lower(), str(said))
+
+
+def test_policy() -> None:
+    import random
+    from janos.policy import Policy, reward
+    section("Routing policy")
+    tmp = Path(tempfile.mkdtemp())
+    sug = ("researcher", "simple")
+    varied = [f"task number {i} about topic {i * 7} please" for i in range(50)]
+    p = Policy(tmp / "fresh.npz", seed=0)
+    ok = True
+    for t in varied:
+        d = p.choose(t, "general", *sug)
+        ok &= (d.agent, d.mode) == sug and d.prob >= 0.8
+    check("policy follows the LLM before training", ok)
+    q = Policy(tmp / "other.npz", seed=5)
+    args = ("how much vram is my gpu using", "system", "operator", "complex")
+    check("policy features are deterministic", bool((p.features(*args) == q.features(*args)).all()))
+    ok = all(p.choose("check gpu temperature", "system", *sug, allowed={"engineer"}).agent == "engineer"
+             for _ in range(30))
+    check("policy respects the tool mask", ok)
+
+    gpu_t = ["how much vram is my gpu using", "check gpu temperature", "is the nvidia driver loaded",
+             "show {} gpu memory usage", "what is the nvidia {} driver version"]
+    web_t = ["latest news about mars rover", "who won the football match yesterday",
+             "latest {} news headlines", "who won the {} election yesterday"]
+    words = ["now", "today", "quickly", "please", "again", "fast"]
+    rnd = random.Random(3)
+
+    def gen(kind: str) -> str:
+        t = rnd.choice(gpu_t if kind == "gpu" else web_t)
+        return t.format(rnd.choice(words)) if "{}" in t else t
+
+    def train(seed: int, right: float, wrong: float, episodes: int = 300) -> tuple[Policy, int, int]:
+        pol = Policy(tmp / f"learn{seed}.npz", seed=seed)
+        for _ in range(episodes):
+            kind = rnd.choice(["gpu", "web"])
+            d = pol.choose(gen(kind), "general", *sug, explore=0.2)   # autonomous-mode exploration
+            pol.learn(d, right if d.agent == ("operator" if kind == "gpu" else "researcher") else wrong)
+        g = sum(pol.choose(gen("gpu"), "general", *sug).agent == "operator" for _ in range(20))
+        w = sum(pol.choose(gen("web"), "general", *sug).agent == "researcher" for _ in range(20))
+        return pol, g, w
+
+    # Every seed must pass: a check that passes only on a lucky seed proves nothing.
+    runs = [train(seed, 0.9, 0.5) for seed in range(5)]
+    worst = min(min(g, w) for _, g, w in runs)
+    check("policy learns to override a wrong suggestion (5 seeds)", worst >= 18,
+          " ".join(f"gpu={g} web={w}" for _, g, w in runs))
+    _, g, _ = train(7, 0.9, 0.85)          # gain 0.05 is below the trust margin
+    check("policy keeps the LLM when the gain is small", g <= 2, f"overrode on {g}/20")
+
+    # The bug this guards: a policy trained on a few good scribe episodes routed
+    # "47 * 89 + 1234" to scribe, which has no calculator, and answered from memory.
+    from janos.supervisor import Supervisor
+    sup = Supervisor(Config.load())
+    need = sup._required_tools("what is 47 * 89 + 1234?")
+    owners = {n for n, a in sup.runner.agents.items() if need <= set(a.tools)}
+    sup.close()
+    bp = Policy(tmp / "bias.npz", seed=3)
+    for i in range(40):                       # make scribe look excellent everywhere
+        bp.learn(bp.choose(f"hello there {i}", "chat", "scribe", "simple"), 1.0)
+    picks = {bp.choose(f"what is {i} * 89 + 1234?", "calculation", "scribe", "simple",
+                       allowed=owners, explore=0.5).agent for i in range(40)}
+    check("arithmetic never reaches an agent without a calculator",
+          "calculate" in need and "scribe" not in picks and picks <= owners, f"{need} {picks}")
+
+    lp = runs[0][0]
+    lp.save()
+    lp2 = Policy(tmp / "learn0.npz", seed=2)
+    same = all(lp.choose(t, "general", *sug).action == lp2.choose(t, "general", *sug).action
+               for t in [gen("gpu") for _ in range(10)] + [gen("web") for _ in range(10)])
+    check("policy survives save and load", same and lp.stats()["updates"] == lp2.stats()["updates"] == 300)
+    from janos.policy import TRUST
+    check("slowness alone cannot outweigh trust",
+          reward(1.0, 0) == 1.0 and reward(1.0, 10) < reward(1.0, 1)
+          and reward(1.0, 0) - reward(1.0, 600) < TRUST and -1.0 <= reward(0, 500) <= 1.0)
+
+    # Server, voice and autonomous mode each hold a Policy on the same file.
+    shared = tmp / "shared.npz"
+    p1, p2 = Policy(shared, seed=10), Policy(shared, seed=11)
+    p1.learn(p1.choose("check gpu", "system", "operator", "simple"), 0.9, key="ep1")
+    p2.learn(p2.choose("hello", "chat", "scribe", "simple"), 0.8, key="ep2")
+    p3 = Policy(shared)
+    check("two processes share one policy without losing updates",
+          p3.stats()["updates"] == 2 and sorted(p3.K.tolist()) == ["ep1", "ep2"], str(p3.stats()))
+    relabeled = p3.relabel("ep1", 0.0)
+    again = p3.relabel("ep1", 0.0)
+    check("a rating replaces the earlier reward",
+          relabeled and again and len(p3.R) == 2 and float(p3.R[p3.K == "ep1"][0]) == 0.0
+          and p3.stats()["updates"] == 2 and not p3.relabel("nope", 1.0), str(p3.R))
+
+    from janos.supervisor import Supervisor
+    sp = Supervisor(Config.load())
+    cases = {"save the 2026-10-21 meeting notes to a file": False, "write a 3-5 page report": False,
+             "my 1920x1080 screen": False, "call 555-1234": False, "dates like 10/21/2026": False,
+             "what is 47*89": True, "what is 10 - 3": True, "15 percent of 240": True, "2.5 * 4": True}
+    wrong = [t for t, want in cases.items() if ("calculate" in sp._required_tools(t)) != want]
+    sp.close()
+    check("arithmetic rule ignores dates, ranges and sizes", not wrong, str(wrong))
+    shutil.rmtree(tmp, ignore_errors=True)
 
 
 def test_server_security() -> None:
@@ -484,6 +648,8 @@ async def main_async() -> int:
     await test_tools()
     await test_sandbox()
     await test_playbooks()
+    await test_voice()
+    test_policy()
 
     if not args.offline:
         await test_network()

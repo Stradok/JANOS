@@ -5,7 +5,7 @@ Global engineering rules still apply; this file adds only JANOS specifics.
 
 ## Run and test
 - Always use `.venv/bin/python` (bare `python3` may resolve to another venv without httpx).
-- `make janos-test` is the check. Use `OFFLINE=1` to skip model and network. Baseline: 93/93 passing.
+- `make janos-test` is the check. Use `OFFLINE=1` to skip model and network. Baseline: 113/113 passing.
 - Model is `qwen2.5:7b-instruct` via Ollama; it is the only model. Do not change it casually.
 
 ## Rules
@@ -14,6 +14,7 @@ Global engineering rules still apply; this file adds only JANOS specifics.
 - Two self-written module kinds: skills (`janos/generated/*.py`, via `forge.py`) and playbooks (`janos/playbooks/*.json`, via `playbooks.py`). Do not add a third path.
 - `shell`, `run_python` and skill smoke tests run in bubblewrap (`janos/sandbox.py`). Never bypass it; prove any change with `JANOS_SANDBOX=false` making the sandbox checks fail.
 - The server binds `127.0.0.1` and needs the token in `memory/api_token`. Never commit tokens or `.brave_key`.
+- The routing policy (`janos/policy.py`) never bypasses `_required_tools` masking. Prove policy changes with the multi-seed selftest check, never a single seed.
 - Legacy v1 (`core/ modules/ agents/ tools/ main.py`) is dead code. Do not edit or import it.
 
 ## Search

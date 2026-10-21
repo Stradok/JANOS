@@ -40,6 +40,7 @@ class Config:
     model: str = "qwen2.5:7b-instruct"
     ollama_url: str = "http://localhost:11434"
     timeout: int = 180
+    keep_alive: str = "30m"     # how long Ollama keeps the model in VRAM after a call
     num_ctx: int = 8192
     # Low temperature: this system depends on the model emitting valid,
     # decisive JSON far more than it depends on creative variety.
@@ -56,11 +57,21 @@ class Config:
     recall_k: int = 4           # episodes injected as context
     lesson_k: int = 4           # lessons injected as context
     learn: bool = True          # distil lessons from episodes
+    rl_policy: bool = True      # learned routing (janos/policy.py) instead of running averages
+    rl_explore: float = 0.05    # chance of trying another route while someone is waiting
+    rl_explore_auto: float = 0.2  # the same in autonomous mode, where a bad try costs nothing
 
     # --- Tools ---
     allow_shell: bool = True
     sandbox: bool = True        # run shell / run_python / smoke tests inside bubblewrap
     shell_network: bool = False # let the sandboxed shell reach the network and localhost
+
+    # --- Voice (janos.voice) ---
+    persona: str = ("You are JANOS, a calm, capable personal AI in the spirit of JARVIS. "
+                    "Speak concisely, with understated dry wit. Address the user as 'sir' "
+                    "only occasionally. Never invent facts; say plainly when you do not know.")
+    voice_name: str = "bm_george"   # Kokoro voice: British male
+    wake_threshold: float = 0.5
     shell_timeout: int = 30
     workspace: Path = field(default_factory=lambda: ROOT / "workspace")
 
@@ -69,14 +80,14 @@ class Config:
     brave_api_key: str = ""
 
     def __post_init__(self) -> None:
-        for f in ("model", "ollama_url"):
+        for f in ("model", "ollama_url", "voice_name", "keep_alive"):
             setattr(self, f, _env(f, getattr(self, f)))
         for f in ("timeout", "num_ctx", "max_steps", "max_heal_attempts",
                   "agent_max_turns", "recall_k", "lesson_k", "shell_timeout"):
             setattr(self, f, _env(f, getattr(self, f)))
-        for f in ("temperature", "min_pass_score"):
+        for f in ("temperature", "min_pass_score", "wake_threshold", "rl_explore", "rl_explore_auto"):
             setattr(self, f, _env(f, getattr(self, f)))
-        for f in ("learn", "allow_shell", "sandbox", "shell_network"):
+        for f in ("learn", "allow_shell", "sandbox", "shell_network", "rl_policy"):
             setattr(self, f, _env(f, getattr(self, f)))
 
         key = os.environ.get("JANOS_BRAVE_API_KEY") or os.environ.get("BRAVE_API_KEY") or ""

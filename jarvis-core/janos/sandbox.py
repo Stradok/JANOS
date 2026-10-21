@@ -79,7 +79,11 @@ def prefix(config: Config, profile: str, *, network: bool = False,
                for a in ("--dev-bind-try", d, d)]
         # Order matters: the empty $HOME is mounted first, then the workspace
         # (which lives under $HOME) is bound back on top of it.
-        args = ["bwrap", "--ro-bind", "/", "/", "--dev", "/dev", *gpu, "--proc", "/proc",
+        # Own PID namespace with the host's /proc bound read-only: `ps` and `top`
+        # still list every host process, but kill() resolves PIDs in the
+        # sandbox's namespace, so host processes cannot be signalled.
+        args = ["bwrap", "--ro-bind", "/", "/", "--dev", "/dev", *gpu,
+                "--unshare-pid", "--ro-bind", "/proc", "/proc",
                 "--tmpfs", "/run", "--ro-bind-try", "/run/systemd/resolve", "/run/systemd/resolve",
                 "--tmpfs", home, "--unshare-ipc",
                 # A shared network namespace also shares abstract sockets (X11)

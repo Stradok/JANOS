@@ -42,12 +42,14 @@ benefit. All reasoning goes to one local model through **Ollama**.
 | `tools.py` | `Toolbox` and the twelve built-in tools. Normalises every result to a string and never raises into the agent loop. |
 | `forge.py` | **Skills.** Authors, validates, smoke-tests and registers new Python tools. |
 | `playbooks.py` | **Playbooks.** Authors, validates and registers JSON tool chains. |
+| `policy.py` | Learned routing: a small numpy Q-network that picks the agent and plan/direct mode, trained on rewards. State in `memory/policy.npz`. |
 | `memory.py` | SQLite store for episodes, lessons, agent statistics and tool statistics, with FTS5 search. |
 | `llm.py` | Ollama client. `chat` for text, `chat_json` for schema-constrained JSON with retry. Tracks token usage. |
 | `auto.py` | Autonomous loop: chooses goals, runs them through the supervisor, logs each cycle. |
 | `server.py` | FastAPI application with bearer-token authentication and host checking. |
 | `sandbox.py` | Builds the bubblewrap command line that `shell`, `run_python` and the forge smoke test run inside. |
 | `cli.py` | Interactive REPL and one-shot commands. |
+| `voice.py` | Voice loop: wake word, end-of-turn detection, speech-to-text, JANOS, spoken reply. |
 | `config.py` | Single configuration source: `janos.yaml`, overridden by `JANOS_*` environment variables. |
 | `selftest.py` | The test suite (`make janos-test`). |
 
@@ -58,9 +60,11 @@ benefit. All reasoning goes to one local model through **Ollama**.
 1. **Recall** (`_context`). Retrieves similar past episodes and learned lessons by BM25
    search and formats them as context (`recall_k` and `lesson_k`, both 4 by default).
 2. **Triage** (`_triage`). One schema-constrained model call returns `task_type`,
-   `complexity` (`simple` or `complex`) and a starting `agent`. Memory's proven-agent
-   record for that task type can override the choice. `_required_tools` then applies
-   a deterministic capability check (see section 6).
+   `complexity` (`simple` or `complex`) and a starting `agent`. The learned policy (section 11) may override the
+   suggestion; its choices are masked to agents that own the tools `_required_tools`
+   implies (arithmetic expressions require `calculate`). With `rl_policy: false`, Memory's
+   proven-agent record for that task type overrides instead. `_required_tools` then
+   applies the deterministic capability check (see section 6).
 3. **Plan** (`_plan`). For complex tasks, the model decomposes the request into
    `{step, agent}` pairs, capped at `max_steps`. `_repair_plan` fixes assignments that
    give a step to an agent which lacks the required tool.
@@ -74,8 +78,8 @@ benefit. All reasoning goes to one local model through **Ollama**.
 7. **Self-heal.** While the score is below `min_pass_score` and attempts remain, execution
    re-runs with the critic's diagnosis and recalled past mistakes injected. A retry is
    adopted only if its score is at least as high; if it is not strictly better, the loop stops.
-8. **Learn.** `Memory.remember` stores the episode, `record_agent` updates rankings, and
-   `_distil` extracts a one-sentence lesson (skipped for small talk that used no tools).
+8. **Learn.** `Memory.remember` stores the episode, `record_agent` updates rankings, the routing policy is updated with the reward
+   (section 11), and `_distil` extracts a one-sentence lesson (skipped for small talk that used no tools).
 
 `handle` returns a `Turn` carrying the answer, score, plan, tool calls, errors, heal
 attempts and lesson. Events are emitted at each stage for the streaming API.
@@ -188,7 +192,17 @@ headless browsers, so they are deliberately not used.
 `TrustedHostMiddleware` admits only `127.0.0.1` and `localhost` unless
 `JANOS_ALLOWED_HOSTS` says otherwise.
 
-## 11. Sandbox
+## 11. Learned routing
+
+`policy.py` replaces the old running-average override (`Memory.best_agent_for`, still used when `rl_policy` is false). A one-step decision (contextual bandit), numpy only.
+
+| | |
+|---|---|
+| **Sees** | Hashed words and word pairs of the request, the task type, and the action the LLM suggested (522 inputs). |
+| **Decides** | One of 10 actions (5 agents x simple/complex): argmax Q plus a 0.15 trust bonus on the LLM's suggestion, so an untrained network follows the LLM. Untried actions start at an optimistic prior of 1.0; with probability `rl_explore` (0.05 interactive, `rl_explore_auto` 0.2 autonomous) a random allowed action is tried. Actions are masked by `_required_tools`. |
+| **Learns** | Reward = verification score minus a latency cost capped at 0.1. A `/feedback` rating replaces that episode's reward rather than adding a second sample. Server, voice and autonomous mode share the file under a lock (reload → train → save). Each outcome enters a 2000-entry replay buffer; the 522 -> 64 (tanh) -> 10 network trains on minibatches with Adam and is saved to `memory/policy.npz`. |
+
+## 12. Sandbox
 
 `sandbox.prefix(config, profile)` returns the bubblewrap arguments to put in front of a
 command, or nothing when the sandbox is off or bubblewrap is missing (`health()` reports
@@ -196,7 +210,7 @@ which).
 
 | Profile | Used by | Sees | Writes | Network |
 |---|---|---|---|---|
-| `observe` | `shell` | processes, disks and GPU; filesystem read-only; `$HOME` and `/run` empty; environment cleared | workspace only | no (`shell_network: true` to allow) |
+| `observe` | `shell` | processes (listed, not signalable), disks and GPU; filesystem read-only; `$HOME` and `/run` empty; environment cleared | workspace only | no (`shell_network: true` to allow) |
 | `isolated` | `run_python`, forge smoke test | `/usr`, `/etc`, workspace, venv | workspace only | no (smoke test: yes) |
 
 `/run` is hidden as deliberately as `$HOME`: the session bus there lets `systemd-run --user`
@@ -208,7 +222,7 @@ The self-test proves the boundary both ways: with the sandbox on, the home folde
 invisible and writes outside the workspace fail; with `JANOS_SANDBOX=false`, those same
 checks fail.
 
-## 12. Extension points
+## 13. Extension points
 
 | To add… | Do this |
 |---|---|
@@ -218,7 +232,7 @@ checks fail.
 | a search provider | add a branch in `web_search` before the Wikipedia fallback |
 | a goal source | add a branch in `AutonomousLoop._next_goal` |
 
-## 13. Data and files at runtime
+## 14. Data and files at runtime
 
 | Path | Contents | In git |
 |---|---|---|

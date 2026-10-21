@@ -104,6 +104,15 @@ janos-auto-night: _janos-check ## JANOS: run autonomously in the background, log
 	@echo "  Watch:  tail -f workspace/autorun-$$(date +%F).md"
 	@echo "  Stop:   make janos-auto-stop"
 
+janos-voice-setup: _janos-check ## JANOS: install voice extras and download speech models (~0.6 GB)
+	@$(JVENV)/bin/pip install -q -r requirements-voice.txt
+	@mkdir -p memory/models && cd memory/models && for f in kokoro-v1.0.int8.onnx voices-v1.0.bin; do \
+	  [ -s $$f ] || curl -sSL -o $$f https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/$$f; done
+	@echo "voice ready: make janos-voice"
+
+janos-voice: _janos-check ## JANOS: talk to it — say "Hey Jarvis" (TEXT=1 to type instead)
+	@$(JVENV)/bin/python -m janos.voice $(if $(TEXT),--text,)
+
 janos-auto-stop: ## JANOS: stop a background autonomous run
 	@touch workspace/STOP && echo "  STOP file created — it will finish the current cycle and exit."
 

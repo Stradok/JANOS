@@ -88,6 +88,7 @@ class AutonomousLoop:
         self.max_cycles = cycles          # 0 = unbounded
         self.verbose = verbose
         self.sup = Supervisor(self.config)
+        self.sup.explore = self.config.rl_explore_auto   # nobody is waiting on these answers
         self.stop_file = self.config.workspace / "STOP"
         self.goals_file = self.config.workspace / "goals.md"
         self.lock_file = self.config.memory_dir / "autorun.pid"

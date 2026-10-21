@@ -15,6 +15,7 @@
 model: qwen2.5:7b-instruct
 ollama_url: http://localhost:11434
 timeout: 180
+keep_alive: 30m        # keep the model in VRAM between requests (Ollama default is 5m)
 num_ctx: 8192
 temperature: 0.15      # low on purpose: control flow is JSON, not prose
 
@@ -28,9 +29,21 @@ min_pass_score: 0.6    # verification score needed to accept an answer
 recall_k: 4            # past episodes injected as context
 lesson_k: 4            # learned lessons injected as context
 learn: true            # distil lessons from episodes
+rl_policy: true        # learned routing: a small Q-network decides agent + plan/direct
+rl_explore: 0.05       # how often it tries another route while you wait
+rl_explore_auto: 0.2   # the same in autonomous mode
 
 # --- Tools -------------------------------------------------------------
 allow_shell: true      # set false to remove shell access entirely
 sandbox: true          # shell / run_python / smoke tests run inside bubblewrap
 shell_network: false   # true lets the shell reach the network and local services
+
+# --- Voice (make janos-voice) ------------------------------------------
+# Wake word "hey jarvis" -> speech-to-text -> JANOS -> spoken reply. Local, English.
+voice_name: bm_george  # Kokoro voices: bm_george, bm_lewis (British), am_adam, af_heart (US)
+wake_threshold: 0.5    # raise if it wakes by itself, lower if it misses you
+persona: >-
+  You are JANOS, a calm, capable personal AI in the spirit of JARVIS.
+  Speak concisely, with understated dry wit. Address the user as 'sir'
+  only occasionally. Never invent facts; say plainly when you do not know.
 shell_timeout: 30

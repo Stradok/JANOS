@@ -81,6 +81,12 @@ Each entry: the choice, why, what was rejected, and what it costs.
 - **Why.** Google served a CAPTCHA to a headless browser, and DuckDuckGo now challenges plain HTTP. Defeating bot detection was rejected as brittle and not something to build in.
 - **Cost.** Scraped HTML can change. A paid or keyed API is the durable option.
 
+### 3.10 Learned routing: Q-learning with replay
+- **Choice.** A small Q-network (contextual bandit) chooses agent and plan/direct mode: argmax Q plus a 0.15 trust bonus on the LLM's suggestion, an optimistic prior of 1.0 for untried actions, epsilon exploration, replay of the last 2000 outcomes. Reward is the verification score minus a latency cost capped at 0.1; a human rating from `/feedback` replaces the critic's reward for that episode instead of adding a second sample. Server, voice and autonomous mode share one policy file under a lock. The capability guard still wins: actions are masked to agents owning the tools `_required_tools` implies.
+- **Why.** The running-average override could not weigh task wording or learn from ratings.
+- **Rejected.** REINFORCE: with a strong prior it rarely explored and learned the right override on only about 6 of 16 random seeds; Q-learning with replay passes 20/20. A "typical" prior of 0.7: actions that had scored well then looked better than untried ones everywhere.
+- **Cost.** It needs exploration, so about 5% of interactive requests try a different route (`rl_explore: 0` disables). Decisions awaiting feedback are kept in memory only and are lost on restart.
+
 ## 4. Failure modes and handling
 
 | Failure | Handling |
@@ -103,7 +109,7 @@ Each entry: the choice, why, what was rejected, and what it costs.
 
 ## 6. Testing strategy
 
-One self-test script (`make janos-test`, 93 checks) in three layers: offline logic (config, memory, guards, forge and playbook validation, autonomy, tools, server authentication), network (search and fetch), and live pipeline runs against the model. Each bug found gets a regression check. Gaps: no dedicated tests for `cli.py`, `llm.py` or `agents.py`; the autonomous loop is covered lightly.
+One self-test script (`make janos-test`, 113 checks) in three layers: offline logic (config, memory, guards, forge and playbook validation, autonomy, tools, server authentication), network (search and fetch), and live pipeline runs against the model. Each bug found gets a regression check. Gaps: no dedicated tests for `cli.py`, `llm.py` or `agents.py`; the autonomous loop is covered lightly.
 
 ## 7. Security model and residual risk
 

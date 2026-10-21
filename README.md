@@ -24,6 +24,8 @@ request ─► recall ─► triage ─► plan ─► delegate ─► verify �
 - **Self-healing.** A failing score re-runs execution with the diagnosis. A retry
   is kept only if it is at least as good, and the loop stops when it stops improving.
 - **Self-learning.** Each task distils a lesson that is recalled on similar tasks.
+  Routing (which agent, plan or direct) is learned by a small Q-network trained on
+  verification scores and your `/feedback` ratings.
 - **Self-extending, two ways.**
   - *Skills* — Python modules JANOS writes for itself, AST-scanned and smoke-tested
     in a separate process before registration.
@@ -50,13 +52,15 @@ cd jarvis-core
 make janos-setup              # creates .venv, installs dependencies, pulls the model
 make janos                    # interactive REPL
 make janos-ask Q="how much VRAM is my GPU using?"
-make janos-test               # self-test (93 checks)
+make janos-test               # self-test (113 checks)
 ```
 
 Other entry points:
 
 | Command | What it does |
 |---|---|
+| `make janos-voice` | Talk to it: say **"Hey Jarvis"**, then your request (`TEXT=1` to type) |
+| `make janos-voice-setup` | One-time: install voice extras and download speech models (~0.6 GB) |
 | `make janos-serve` | HTTP API on `127.0.0.1:8000` (bearer-token protected) |
 | `make janos-auto` | Autonomous mode: chooses its own goals |
 | `make janos-auto-night` | Autonomous mode in the background |
@@ -66,6 +70,20 @@ Other entry points:
 | `make janos-tools` | All tools, including self-written ones |
 
 Full command reference: [docs/USAGE.md](docs/USAGE.md).
+
+## Voice
+
+Fully local and English-only for now. The LLM keeps the GPU; speech runs on the CPU.
+
+```
+mic ─► wake word ("hey jarvis", openWakeWord) ─► end-of-turn (Silero VAD)
+    ─► speech-to-text (faster-whisper small.en) ─► JANOS ─► text-to-speech (Kokoro, British voice)
+```
+
+A warm turn takes about 4–6 seconds from the end of your sentence to the start of the reply.
+The microphone is ignored while JANOS speaks, so it cannot wake itself. The personality,
+voice and wake sensitivity are set in `jarvis-core/janos.yaml` (`persona`, `voice_name`,
+`wake_threshold`). A custom "Hey JANOS" wake word needs a trained model and is not included yet.
 
 ## HTTP API
 
@@ -123,6 +141,8 @@ Settings live in `jarvis-core/janos.yaml`; any value can be overridden with a
 | `allow_shell` | true | set false to remove shell access entirely |
 | `sandbox` | true | run shell, run_python and smoke tests inside bubblewrap |
 | `shell_network` | false | let the sandboxed shell reach the network and local services |
+| `rl_policy` | true | learned routing; false falls back to the best running average per task type |
+| `rl_explore` | 0.05 | how often the policy tries another route while you wait (0 disables; `rl_explore_auto` 0.2 in autonomous mode) |
 
 Optional: a Brave Search API key (`BRAVE_API_KEY`, or the file
 `jarvis-core/.brave_key`) is used first for web search when present. Without one,

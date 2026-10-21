@@ -33,4 +33,7 @@ copilot-tool-output-*
 # secrets
 jarvis-core/.brave_key
 jarvis-core/memory/api_token
+jarvis-core/memory/models/
+jarvis-core/memory/policy.npz*
+jarvis-core/memory/policy.lock
 jarvis-core/memory/autorun.pid

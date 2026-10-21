@@ -1,0 +1,8 @@
+# Optional voice extras for janos.voice (local, English).
+#   .venv/bin/pip install -r requirements-voice.txt
+# Models (about 0.6 GB) live in memory/models/: Kokoro is downloaded by
+# `make janos-voice-setup`; Whisper small.en downloads on first use.
+faster-whisper>=1.2   # speech-to-text; also ships the Silero VAD model
+openwakeword>=0.4     # "hey jarvis" wake word
+kokoro-onnx>=0.4      # text-to-speech, no PyTorch needed
+sounddevice>=0.5      # microphone and speakers (needs libportaudio2)

@@ -28,6 +28,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from janos.config import Config
+from janos.policy import reward
 from janos.supervisor import Supervisor
 
 _state: dict[str, Any] = {}
@@ -193,6 +194,8 @@ async def feedback(body: FeedbackIn) -> dict[str, Any]:
         s.memory._conn.commit()
     for agent in ep.get("agents") or []:
         s.memory.record_agent(str(agent).split("->")[-1], ep.get("task_type", "general"), score)
+    if s.policy is not None:
+        s.policy.relabel(body.episode_id, reward(score, (ep.get("duration_ms") or 0) / 1000))
 
     learned = ""
     if body.comment.strip():

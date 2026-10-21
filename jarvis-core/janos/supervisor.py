@@ -31,6 +31,7 @@ from janos.config import Config
 from janos import sandbox
 from janos.forge import ToolForge
 from janos.playbooks import PlaybookForge
+from janos.policy import Policy, reward
 from janos.llm import LLM, LLMError
 from janos.memory import Memory
 from janos.tools import Tool, Toolbox
@@ -208,6 +209,11 @@ class Supervisor:
         for name in self.forge.load_all():
             self._grant(name)
 
+        # Learned routing. Each outcome is stored under its episode id, so a
+        # later human rating replaces the critic's reward for that decision.
+        self.policy = Policy(self.config.memory_dir / "policy.npz") if self.config.rl_policy else None
+        self.explore = self.config.rl_explore
+
         # Second module type: tool-calling playbooks (JSON, no code).
         self.playbooks = PlaybookForge(self.config, self.llm, self.toolbox, self.memory)
         self._install_playbooks()
@@ -302,6 +308,7 @@ class Supervisor:
             "playbooks": self.playbooks.names(),
             "memory": self.memory.stats(),
             "sandbox": sandbox.describe(self.config),
+            "policy": self.policy.stats() if self.policy else "off",
             "config": {"model": self.config.model, "max_steps": self.config.max_steps,
                        "max_heal_attempts": self.config.max_heal_attempts},
         }
@@ -365,19 +372,28 @@ Request: {task}
 
         task_type = (out.get("task_type") or "general").strip().lower()[:32] or "general"
 
-        # Evidence beats the model's guess: if one agent has a proven record on
-        # this task type, prefer it. This is the routing half of self-learning.
-        proven = self.memory.best_agent_for(task_type)
-        if proven and proven in self.runner.agents:
-            agent = proven
-
         complexity = "complex" if out.get("complexity") == "complex" else "simple"
+
+        # Evidence beats the model's guess. With the learned policy, a Q-network
+        # trained on past rewards may override the suggestion; without it, the
+        # agent with the best running average on this task type does.
+        decision = None
+        needed = self._required_tools(task)
+        if self.policy is not None:
+            allowed = {n for n, a in self.runner.agents.items() if needed <= set(a.tools)} if needed else None
+            d = self.policy.choose(task, task_type, agent, complexity,
+                                   allowed=allowed or None, explore=self.explore)
+            if d.agent in self.runner.agents:
+                agent, complexity, decision = d.agent, d.mode, d
+        else:
+            proven = self.memory.best_agent_for(task_type)
+            if proven and proven in self.runner.agents:
+                agent = proven
 
         # Deterministic capability guard. The model happily routes "…and save it
         # to a file" to an agent with no write_file and then improvises with
         # shell echo. Whether an agent owns a tool is a fact, so it is settled
         # here rather than left to the model's self-assessment.
-        needed = self._required_tools(task)
         if complexity == "simple" and needed:
             owned = set(self.runner.agents[agent].tools)
             if not needed <= owned:
@@ -388,6 +404,7 @@ Request: {task}
             "complexity": complexity,
             "agent": agent,
             "reason": (out.get("reason") or "")[:200],
+            "decision": decision,
         }
 
     def _required_tools(self, task: str) -> set[str]:
@@ -410,6 +427,16 @@ Request: {task}
             r"uptime|temperature)\b", low
         ) and re.search(r"\b(check|what|how much|show|report|tell|inspect|my|this machine)\b", low):
             needed.add("system_info")
+        # Arithmetic is computed, never recalled: a model doing 47*89 "in its
+        # head" is sometimes right, and a right guess would teach the routing
+        # policy that skipping the calculator pays.
+        # Dates, ranges, sizes and phone numbers look like operators (2026-10-21,
+        # 3-5, 1920x1080, 555-1234), so dates are removed and "-"/"x" only count
+        # with spaces around them.
+        arith = re.sub(r"\b\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}\b", " ", low)
+        if re.search(r"(?<![\w.])\d+(?:\.\d+)?\s*[+*/×^]\s*\d"
+                     r"|\d\s+[-x]\s+\d|\bpercent of\b|%\s*of\b", arith):
+            needed.add("calculate")
         # An explicit request to build a tool must reach create_tool. Left alone
         # the agent writes Python that *describes* a tool and calls it done.
         if "create_tool" in low or re.search(
@@ -779,6 +806,7 @@ or the only available lesson is a truism.
         self._emit({"type": "recall", "episodes": recalled})
 
         triage = await self._triage(turn.task, context)
+        decision = triage.pop("decision", None)     # not JSON; kept out of the event stream
         turn.task_type = triage["task_type"]
         turn.complexity = triage["complexity"]
         self._emit({"type": "triage", **triage})
@@ -844,6 +872,9 @@ or the only available lesson is a truism.
         )
         for agent in turn.agents_used:
             self.memory.record_agent(agent.split("->")[-1], turn.task_type, turn.score)
+        if decision is not None:
+            self.policy.learn(decision, reward(turn.score, turn.duration_ms / 1000),
+                              key=turn.episode_id)
 
         turn.lesson = await self._distil(turn)
         if turn.lesson:
