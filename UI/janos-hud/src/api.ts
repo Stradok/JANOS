@@ -81,8 +81,28 @@ export async function streamChat(input: string, onEvent: (e: ServerEvent) => voi
   }
 }
 
+let persona = '';  // sent with every /speak once known (theme name == persona name)
+
+/** Make `name` the spoken persona: remembered for /speak, and set on the server (failure is logged, never thrown). */
+export async function setPersona(name: string): Promise<void> {
+  persona = name;
+  try {
+    const r = await call('/persona', { method: 'POST', body: JSON.stringify({ persona: name }) });
+    if (!r.ok) console.warn(`/persona: HTTP ${r.status}`);
+  } catch (e) { console.warn('/persona failed', e); }
+}
+
+/** The server's active persona name, or null if unavailable. */
+export async function getPersona(): Promise<string | null> {
+  try {
+    const a = (await getJson<{ active: string }>('/persona')).active;
+    persona = a;
+    return a;
+  } catch (e) { console.warn('GET /persona failed', e); return null; }
+}
+
 export async function speak(text: string): Promise<ArrayBuffer> {
-  const r = await call('/speak', { method: 'POST', body: JSON.stringify({ text: text.slice(0, 1000) }) });
+  const r = await call('/speak', { method: 'POST', body: JSON.stringify({ text: text.slice(0, 1000), ...(persona && { persona }) }) });
   if (!r.ok) throw new Error(`/speak: HTTP ${r.status}`);
   return r.arrayBuffer();
 }

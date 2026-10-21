@@ -4,7 +4,7 @@ import { FragmentedOrbCanvas } from './components/FragmentedOrbCanvas';
 import { CameraPanel } from './components/CameraPanel';
 import { OrbLive, OrbSettings, VisualTheme } from './types';
 import { THEMES } from './utils/themes';
-import { AuthError, getJson, Health, initToken, sendFeedback, ServerEvent, speak, streamChat, Telemetry } from './api';
+import { AuthError, getJson, getPersona, setPersona, Health, initToken, sendFeedback, ServerEvent, speak, streamChat, Telemetry } from './api';
 import { playWav, stopAudio, unlockAudio } from './player';
 
 interface Stage { id: number; kind: string; label: string; detail?: string; bad?: boolean }
@@ -93,6 +93,11 @@ export default function App() {
     document.documentElement.style.setProperty('--accent', THEMES[theme].accent);
     lsSet('janos_theme', theme);
   }, [theme]);
+  useEffect(() => {
+    if (!token) return;
+    void getPersona().then((p) => { if (p === 'jarvis' || p === 'ultron') setTheme(p); });
+  }, [token]);
+  const toggleTheme = () => { const n = theme === 'jarvis' ? 'ultron' : 'jarvis'; setTheme(n); void setPersona(n); };
   useEffect(() => lsSet('janos_camera', camOn ? '1' : '0'), [camOn]);
   useEffect(() => lsSet('janos_muted', muted ? '1' : '0'), [muted]);
   useEffect(() => { const t = setInterval(() => setNow(new Date()), 1000); return () => clearInterval(t); }, []);
@@ -267,7 +272,7 @@ export default function App() {
               <button type="button" className="hud-btn" aria-pressed={muted} aria-label={muted ? 'Unmute spoken replies' : 'Mute spoken replies'}
                 onClick={() => { setMuted((m) => !m); stopAudio(); }}>{muted ? <VolumeX size={14} /> : <Volume2 size={14} />}</button>
               <button type="button" className="hud-btn flex items-center gap-1" aria-label={`Switch theme, now ${theme}`}
-                onClick={() => setTheme((t) => (t === 'jarvis' ? 'ultron' : 'jarvis'))}><Palette size={14} />{theme}</button>
+                onClick={toggleTheme}><Palette size={14} />{theme}</button>
             </form>
           </Panel>
         </div>

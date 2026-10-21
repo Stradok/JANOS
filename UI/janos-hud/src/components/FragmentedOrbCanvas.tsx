@@ -1,473 +1,265 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
-import { OrbSettings, OrbLive } from '../types';
-import { generateSphericalFragments, FragmentMeshInstance } from '../utils/geometryGenerator';
-import { createArcReactor, ArcReactorInstance } from '../utils/arcReactorGenerator';
-import { createAmbientGlare, AmbientGlareInstance } from '../utils/ambientGlareSystem';
-import { createStudioEnvironment } from '../utils/environmentGenerator';
-import { THEMES } from '../utils/themes';
+import { OrbSettings, OrbLive, VisualTheme } from '../types';
 
 interface Props {
   settings: OrbSettings;
   live: React.MutableRefObject<OrbLive>;
 }
 
+// A globe drawn only in light: nested shells of line fragments + node dots, a ringed core, all additive.
+const SHELLS = 6;
+const SEGS = 1350;   // line segments per shell (2 vertices each)
+const NODES = 300;   // node dots per shell
+const ORB_COLORS: Record<VisualTheme, { primary: THREE.Color; hot: THREE.Color }> = {
+  jarvis: { primary: new THREE.Color('#ffb24d'), hot: new THREE.Color('#fff2cc') },
+  ultron: { primary: new THREE.Color('#ff4d4d'), hot: new THREE.Color('#ffd0d0') },
+};
+const ERROR_COLOR = new THREE.Color('#ff1030');
+
+const VERT = `
+  attribute float aT;   // 0 = deep primary, 1 = hot centre colour
+  attribute float aPh;  // data-streak phase, <0 = never streaks
+  uniform float uTime, uSize, uOpacity;
+  varying float vT, vA, vBoost;
+  void main() {
+    vT = aT;
+    vBoost = aPh < 0.0 ? 0.0 : pow(max(0.0, 1.0 - fract(uTime * 0.18 + aPh) * 14.0), 2.0) * 3.0;
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    float facing = dot(position, position) < 1e-4 ? 1.0 : abs((normalMatrix * normalize(position)).z);
+    vA = uOpacity * mix(0.4, 1.0, facing);
+    gl_PointSize = uSize * (6.0 / -mv.z);
+    gl_Position = projectionMatrix * mv;
+  }`;
+const FRAG = (round: boolean) => `
+  uniform vec3 uPrimary, uHot;
+  uniform float uGain;
+  varying float vT, vA, vBoost;
+  void main() {
+    ${round ? 'float d = length(gl_PointCoord - 0.5); if (d > 0.5) discard; float soft = smoothstep(0.5, 0.0, d);' : 'float soft = 1.0;'}
+    vec3 c = mix(uPrimary, uHot, vT * vT) * uGain * (1.0 + vBoost);
+    gl_FragColor = vec4(c, vA * soft);
+  }`;
+
+function randUnit(v: THREE.Vector3) {
+  const z = Math.random() * 2 - 1, a = Math.random() * Math.PI * 2, r = Math.sqrt(1 - z * z);
+  return v.set(r * Math.cos(a), r * Math.sin(a), z);
+}
+
+/** One shell's geometry: lat/lon partial arcs + right-angle circuit traces (lines) and junction dots (points). */
+function buildShell(R: number, tBase: number) {
+  const lp = new Float32Array(SEGS * 6), lt = new Float32Array(SEGS * 2), lph = new Float32Array(SEGS * 2);
+  const np = new Float32Array(NODES * 3), nt = new Float32Array(NODES), nph = new Float32Array(NODES);
+  let s = 0, n = 0;
+  const T = () => Math.min(1, tBase + (Math.random() - 0.5) * 0.35);
+  const seg = (ax: number, ay: number, az: number, bx: number, by: number, bz: number, t: number, ph: number) => {
+    lp.set([ax * R, ay * R, az * R, bx * R, by * R, bz * R], s * 6);
+    lt[s * 2] = lt[s * 2 + 1] = t; lph[s * 2] = lph[s * 2 + 1] = ph; s++;
+  };
+  const node = (x: number, y: number, z: number) => {
+    if (n >= NODES) return;
+    np.set([x * R, y * R, z * R], n * 3); nt[n] = Math.min(1, T() + 0.25); nph[n] = -1; n++;
+  };
+  const p = new THREE.Vector3(), d = new THREE.Vector3(), q = new THREE.Vector3(), c = new THREE.Vector3();
+  while (s < SEGS - 20) {
+    const t = T(), streak = Math.random() < 0.08, ph0 = Math.random();
+    const ph = (i: number) => (streak ? (ph0 + i * 0.012) % 1 : -1);
+    const r = Math.random();
+    if (r < 0.45) {
+      // partial latitude / longitude arc
+      const lat = r < 0.22, len = 0.4 + Math.random() * 1.8, a0 = Math.random() * Math.PI * 2;
+      const fixed = lat ? Math.acos(Math.random() * 2 - 1) : Math.random() * Math.PI * 2;
+      const pt = (a: number, o: THREE.Vector3) => lat
+        ? o.set(Math.sin(fixed) * Math.cos(a), Math.cos(fixed), Math.sin(fixed) * Math.sin(a))
+        : o.set(Math.sin(a) * Math.cos(fixed), Math.cos(a), Math.sin(a) * Math.sin(fixed));
+      const step = lat ? 0.12 / Math.max(Math.sin(fixed), 0.3) : 0.12;
+      for (let a = 0, i = 0; a < len && s < SEGS; a += step, i++) {
+        pt(a0 + a, p); pt(a0 + a + step, q);
+        seg(p.x, p.y, p.z, q.x, q.y, q.z, t, ph(i));
+      }
+    } else {
+      // circuit trace: great-circle steps that sometimes turn 90 degrees
+      randUnit(p); randUnit(d); d.addScaledVector(p, -d.dot(p)).normalize();
+      node(p.x, p.y, p.z);
+      const steps = 4 + Math.floor(Math.random() * 11);
+      for (let i = 0; i < steps && s < SEGS; i++) {
+        const a = 0.04 + Math.random() * 0.1, ca = Math.cos(a), sa = Math.sin(a);
+        q.copy(p).multiplyScalar(ca).addScaledVector(d, sa);
+        d.multiplyScalar(ca).addScaledVector(p, -sa);
+        seg(p.x, p.y, p.z, q.x, q.y, q.z, t, ph(i));
+        p.copy(q);
+        if (Math.random() < 0.35) { c.crossVectors(p, d); d.copy(c).multiplyScalar(Math.random() < 0.5 ? 1 : -1); node(p.x, p.y, p.z); }
+      }
+    }
+  }
+  s = Math.min(s, SEGS);
+  while (n < NODES) { randUnit(p); node(p.x, p.y, p.z); }
+  const lg = new THREE.BufferGeometry();
+  lg.setAttribute('position', new THREE.BufferAttribute(lp, 3));
+  lg.setAttribute('aT', new THREE.BufferAttribute(lt, 1));
+  lg.setAttribute('aPh', new THREE.BufferAttribute(lph, 1));
+  lg.setDrawRange(0, s * 2);
+  const pg = new THREE.BufferGeometry();
+  pg.setAttribute('position', new THREE.BufferAttribute(np, 3));
+  pg.setAttribute('aT', new THREE.BufferAttribute(nt, 1));
+  pg.setAttribute('aPh', new THREE.BufferAttribute(nph, 1));
+  return { lg, pg, vertices: s * 2 + NODES };
+}
+
 export const FragmentedOrbCanvas: React.FC<Props> = ({ settings, live }) => {
   const containerRef = useRef<HTMLDivElement>(null);
-  const animationFrameRef = useRef<number>(0);
-  const [isPointerDown, setIsPointerDown] = useState(false);
-
-  // Store mutable state for animation loop without re-triggering useEffect
-  const stateRef = useRef({
-    settings,
-    time: 0,
-    cameraAngleX: 0.35,
-    cameraAngleY: 0.7,
-    cameraTargetDistance: 9.0,
-    currentCameraDist: 9.0,
-    isUserInteracting: false,
-    lastMouseX: 0,
-    lastMouseY: 0,
-  });
-
-  stateRef.current.settings = settings;
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+    let width = container.clientWidth, height = container.clientHeight;
 
-    const width = container.clientWidth;
-    const height = container.clientHeight;
-
-    // --- Scene Setup ---
     const scene = new THREE.Scene();
-    const baseFogColor = new THREE.Color(0x000000);
-    const leakedFogColor = new THREE.Color(THEMES[settings.theme].fog);
-    scene.fog = new THREE.FogExp2(0x000000, 0.04);
-    const errorColor = new THREE.Color(0xff1030);
-    const baseCoreColor = new THREE.Color();
-
-    // --- Camera ---
     const camera = new THREE.PerspectiveCamera(42, width / height, 0.1, 100);
-    camera.position.set(0, 2.5, 9.0);
+    camera.position.set(0, 0.6, 8.2);
+    camera.lookAt(0, 0, 0);
 
-    // --- Renderer ---
-    const renderer = new THREE.WebGLRenderer({
-      antialias: true,
-      powerPreference: 'high-performance',
-      alpha: false,
-    });
+    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance', alpha: false });
     renderer.setSize(width, height);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 0.98; // Balanced exposure to prevent clipping
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    renderer.setClearColor(0x000000, 1); // Pure pitch black
-    renderer.domElement.style.backgroundColor = '#000000';
+    renderer.setClearColor(0x000000, 1);
     container.appendChild(renderer.domElement);
 
-    // --- Baked Reflection Environment Map (PMREM) ---
-    const studioEnvMap = createStudioEnvironment(renderer);
-    scene.environment = studioEnvMap;
-
-    // --- Post-Processing Bloom Pipeline (UnrealBloomPass) ---
     const composer = new EffectComposer(renderer);
-    const renderPass = new RenderPass(scene, camera);
-    composer.addPass(renderPass);
+    composer.addPass(new RenderPass(scene, camera));
+    const bloom = new UnrealBloomPass(new THREE.Vector2(width, height), 0.9, 0.6, 0.25);
+    composer.addPass(bloom);
 
-    const bloomPass = new UnrealBloomPass(
-      new THREE.Vector2(width, height),
-      0.82, // bloom strength (tuned low/tight)
-      0.45, // bloom radius
-      0.82  // bloom threshold (only hottest core glows)
-    );
-    composer.addPass(bloomPass);
+    // Uniform objects shared by every material so one write recolours/drives the whole orb.
+    const U = {
+      uPrimary: { value: new THREE.Color() }, uHot: { value: new THREE.Color() },
+      uGain: { value: 1 }, uTime: { value: 0 },
+    };
+    const mats: THREE.ShaderMaterial[] = [];
+    const geos: THREE.BufferGeometry[] = [];
+    const mat = (round: boolean, opacity: number, size: number) => {
+      const m = new THREE.ShaderMaterial({
+        uniforms: { ...U, uOpacity: { value: opacity }, uSize: { value: size * renderer.getPixelRatio() } },
+        vertexShader: VERT, fragmentShader: FRAG(round),
+        transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+      });
+      mats.push(m); return m;
+    };
 
-    // --- Current Theme Colors ---
-    const theme = THEMES[settings.theme] || THEMES.jarvis;
-    const themeGlowColor = new THREE.Color(theme.glowColor);
-    const themeCoreOuterColor = new THREE.Color(theme.coreOuter);
-
-    // --- Refined Housing Shard Material ---
-    // Precision dark titanium/gunmetal with clearcoat, rich environmental reflection, and subtle crimson warmth
-    const shellMaterial = new THREE.MeshPhysicalMaterial({
-      color: new THREE.Color(theme.shellExterior),
-      metalness: 0.88,
-      roughness: 0.24,
-      clearcoat: 0.35,
-      clearcoatRoughness: 0.18,
-      envMapIntensity: 2.6,
-      emissive: new THREE.Color(theme.shellEmissive),
-      emissiveIntensity: 0.5,
-      side: THREE.DoubleSide,
-    });
-
-    // --- Streamlined Panel Geometry (Fewer, larger, precision curved panels) ---
-    const { group: shellGroup, fragments } = generateSphericalFragments(
-      2.05, // outer radius
-      1.78, // inner radius (substantial physical wall thickness)
-      5,    // lat segments (streamlined count)
-      10,   // lon segments (streamlined count)
-      shellMaterial
-    );
-    scene.add(shellGroup);
-
-    // --- Refined 3D Arc Reactor Core (Radial falloff shader & dense stators) ---
-    const arcReactor: ArcReactorInstance = createArcReactor(theme);
-    scene.add(arcReactor.group);
-
-    // --- Atmospheric Ambient Glare & Bloom System ---
-    const ambientGlare: AmbientGlareInstance = createAmbientGlare(theme.glowColor);
-    scene.add(ambientGlare.group);
-
-    // --- Lighting Rig (Deep cinematic dark atmosphere with crisp rim accents) ---
-    // 1. Central Core Light (calibrated intensity so it illuminates without clipping)
-    const coreLight = new THREE.PointLight(theme.coreOuter, 3.4, 20, 2.0);
-    coreLight.castShadow = true;
-    coreLight.shadow.bias = -0.002;
-    scene.add(coreLight);
-
-    // 2. Secondary soft ambient wash light
-    const ambientWashLight = new THREE.PointLight(theme.glowColor, 0.4, 16, 1.8);
-    scene.add(ambientWashLight);
-
-    // 3. Primary Key Rim Light (Highlights top & front panels)
-    const keyRimLight = new THREE.DirectionalLight(0xdde5f0, 1.8);
-    keyRimLight.position.set(7, 10, 8);
-    scene.add(keyRimLight);
-
-    // 4. Fill Rim Light (Traces outer bevels and contours)
-    const fillRimLight = new THREE.DirectionalLight(theme.ambientLight, 1.8);
-    fillRimLight.position.set(-8, -5, -7);
-    scene.add(fillRimLight);
-
-    // 5. Underside Core Radiance Bounce
-    const underBounceLight = new THREE.DirectionalLight(theme.bounceLight, 1.2);
-    underBounceLight.position.set(0, -6, 2);
-    scene.add(underBounceLight);
-
-    // 6. Base Deep Ambient Illumination
-    const ambientLight = new THREE.AmbientLight(0x0a0c10, 0.45);
-    scene.add(ambientLight);
-
-    // --- Volumetric Floating Particle Dust System ---
-    const particleCount = 2800;
-    const particleGeo = new THREE.BufferGeometry();
-    const particlePositions = new Float32Array(particleCount * 3);
-    const particleVelocities = new Float32Array(particleCount * 3);
-    const particleScales = new Float32Array(particleCount);
-    const particleRandoms = new Float32Array(particleCount);
-
-    for (let i = 0; i < particleCount; i++) {
-      const radius = 0.9 + Math.pow(Math.random(), 0.75) * 5.2;
-      const u = Math.random();
-      const v = Math.random();
-      const theta = u * 2.0 * Math.PI;
-      const phi = Math.acos(2.0 * v - 1.0);
-      const sinPhi = Math.sin(phi);
-
-      const x = radius * sinPhi * Math.cos(theta);
-      const y = radius * sinPhi * Math.sin(theta);
-      const z = radius * Math.cos(phi);
-
-      particlePositions[i * 3] = x;
-      particlePositions[i * 3 + 1] = y;
-      particlePositions[i * 3 + 2] = z;
-
-      particleVelocities[i * 3] = (Math.random() - 0.5) * 0.004 + ( -y * 0.0022 );
-      particleVelocities[i * 3 + 1] = (Math.random() - 0.5) * 0.004 + ( x * 0.0022 );
-      particleVelocities[i * 3 + 2] = (Math.random() - 0.5) * 0.0035;
-
-      particleScales[i] = 0.8 + Math.random() * 2.5;
-      particleRandoms[i] = Math.random() * 10.0;
+    const root = new THREE.Group();
+    scene.add(root);
+    const shells: { g: THREE.Group; axis: THREE.Vector3; speed: number; phase: number }[] = [];
+    let totalVertices = 0;
+    for (let i = 0; i < SHELLS; i++) {
+      const k = i / (SHELLS - 1);                 // 0 inner .. 1 outer
+      const { lg, pg, vertices } = buildShell(0.85 + i * 0.3, 0.85 - k * 0.55);
+      geos.push(lg, pg); totalVertices += vertices;
+      const g = new THREE.Group();
+      g.add(new THREE.LineSegments(lg, mat(false, 0.8 - k * 0.45, 0)));
+      g.add(new THREE.Points(pg, mat(true, 0.95 - k * 0.45, 5)));
+      root.add(g);
+      shells.push({
+        g, axis: randUnit(new THREE.Vector3()), phase: Math.random() * 6.28,
+        speed: (0.05 + Math.random() * 0.1) * (i % 3 === 1 ? -1 : 1) * (1 + (1 - k) * 0.6),
+      });
     }
 
-    particleGeo.setAttribute('position', new THREE.BufferAttribute(particlePositions, 3));
-    particleGeo.setAttribute('aScale', new THREE.BufferAttribute(particleScales, 1));
-    particleGeo.setAttribute('aRandom', new THREE.BufferAttribute(particleRandoms, 1));
+    // Core: tilted concentric rings around a blazing point.
+    const ringPos = new Float32Array(64 * 6), ringT = new Float32Array(128).fill(0.9), ringPh = new Float32Array(128).fill(-1);
+    for (let i = 0; i < 64; i++) {
+      const a = (i / 64) * Math.PI * 2, b = ((i + 1) / 64) * Math.PI * 2;
+      ringPos.set([Math.cos(a), Math.sin(a), 0, Math.cos(b), Math.sin(b), 0], i * 6);
+    }
+    const ringGeo = new THREE.BufferGeometry();
+    ringGeo.setAttribute('position', new THREE.BufferAttribute(ringPos, 3));
+    ringGeo.setAttribute('aT', new THREE.BufferAttribute(ringT, 1));
+    ringGeo.setAttribute('aPh', new THREE.BufferAttribute(ringPh, 1));
+    const ringMat = mat(false, 0.9, 0);
+    geos.push(ringGeo);
+    const rings: { m: THREE.LineSegments; wx: number; wy: number }[] = [];
+    for (let i = 0; i < 4; i++) {
+      const m = new THREE.LineSegments(ringGeo, ringMat);
+      m.scale.setScalar(0.18 + i * 0.13);
+      m.rotation.set(i * 0.7, i * 1.1, 0);
+      root.add(m);
+      rings.push({ m, wx: 0.5 + i * 0.3, wy: (i % 2 ? -1 : 1) * (0.7 + i * 0.25) });
+    }
+    const dotGeo = new THREE.BufferGeometry();
+    dotGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(3), 3));
+    dotGeo.setAttribute('aT', new THREE.BufferAttribute(new Float32Array([1]), 1));
+    dotGeo.setAttribute('aPh', new THREE.BufferAttribute(new Float32Array([-1]), 1));
+    geos.push(dotGeo);
+    const dotMat = mat(true, 1, 26);
+    const dot = new THREE.Points(dotGeo, dotMat);
+    root.add(dot);
+    if (import.meta.env.DEV) console.debug('orb vertices', totalVertices, 'per shell', SEGS * 2 + NODES);
 
-    // Custom Dust Shader (Particles bathed in subtle optical ambience)
-    const particleShaderMat = new THREE.ShaderMaterial({
-      uniforms: {
-        coreColor: { value: themeCoreOuterColor },
-        glowColor: { value: themeGlowColor },
-        ambientColor: { value: new THREE.Color(0x3a4856) },
-        expansion: { value: 0.0 },
-        time: { value: 0.0 },
-      },
-      vertexShader: `
-        attribute float aScale;
-        attribute float aRandom;
-        uniform float time;
-        uniform float expansion;
-        varying vec3 vWorldPos;
-        varying float vDist;
-        varying float vRandom;
-
-        void main() {
-          vRandom = aRandom;
-          vec3 pos = position;
-
-          pos.x += sin(time * 0.4 + aRandom) * 0.09;
-          pos.y += cos(time * 0.35 + aRandom * 1.3) * 0.09;
-          pos.z += sin(time * 0.45 + aRandom * 2.1) * 0.09;
-
-          vWorldPos = (modelMatrix * vec4(pos, 1.0)).xyz;
-          vDist = length(pos);
-
-          vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
-          gl_PointSize = aScale * (20.0 / -mvPosition.z) * (1.0 + sin(time * 1.8 + aRandom) * 0.3);
-          gl_Position = projectionMatrix * mvPosition;
-        }
-      `,
-      fragmentShader: `
-        uniform vec3 coreColor;
-        uniform vec3 glowColor;
-        uniform vec3 ambientColor;
-        uniform float expansion;
-        varying vec3 vWorldPos;
-        varying float vDist;
-        varying float vRandom;
-
-        void main() {
-          vec2 coord = gl_PointCoord - vec2(0.5);
-          float dist = length(coord);
-          if (dist > 0.5) discard;
-          float alpha = smoothstep(0.5, 0.0, dist);
-
-          float coreIntensity = 1.0 / (1.0 + vDist * vDist * 0.3);
-          
-          float ambientWash = clamp(coreIntensity * 1.5 + expansion * 0.6, 0.0, 1.0);
-          vec3 col = mix(ambientColor * 0.3, coreColor * 2.5, ambientWash);
-          col = mix(col, glowColor * 3.2, pow(coreIntensity, 1.5));
-
-          gl_FragColor = vec4(col, alpha * (0.45 + coreIntensity * 0.5 + expansion * 0.25));
-        }
-      `,
-      transparent: true,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-    });
-
-    const particleSystem = new THREE.Points(particleGeo, particleShaderMat);
-    scene.add(particleSystem);
-
-    // --- Mouse & Touch Drag Controls ---
-    const handlePointerDown = (e: MouseEvent | TouchEvent) => {
-      stateRef.current.isUserInteracting = true;
-      setIsPointerDown(true);
-      const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
-      const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
-      stateRef.current.lastMouseX = clientX;
-      stateRef.current.lastMouseY = clientY;
+    const onResize = () => {
+      width = container.clientWidth; height = container.clientHeight;
+      camera.aspect = width / height; camera.updateProjectionMatrix();
+      renderer.setSize(width, height); composer.setSize(width, height); bloom.resolution.set(width, height);
     };
+    const ro = new ResizeObserver(onResize);
+    ro.observe(container);
 
-    const handlePointerMove = (e: MouseEvent | TouchEvent) => {
-      if (!stateRef.current.isUserInteracting) return;
-      const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
-      const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
-
-      const deltaX = clientX - stateRef.current.lastMouseX;
-      const deltaY = clientY - stateRef.current.lastMouseY;
-
-      stateRef.current.cameraAngleY -= deltaX * 0.0055;
-      stateRef.current.cameraAngleX = Math.max(-1.2, Math.min(1.2, stateRef.current.cameraAngleX + deltaY * 0.0055));
-
-      stateRef.current.lastMouseX = clientX;
-      stateRef.current.lastMouseY = clientY;
-    };
-
-    const handlePointerUp = () => {
-      stateRef.current.isUserInteracting = false;
-      setIsPointerDown(false);
-    };
-
-    const handleWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      const zoomDelta = e.deltaY * 0.0035;
-      stateRef.current.cameraTargetDistance = Math.max(3.6, Math.min(16.0, stateRef.current.cameraTargetDistance + zoomDelta));
-    };
-
-    const domEl = renderer.domElement;
-    domEl.addEventListener('mousedown', handlePointerDown);
-    domEl.addEventListener('mousemove', handlePointerMove);
-    window.addEventListener('mouseup', handlePointerUp);
-    domEl.addEventListener('touchstart', handlePointerDown, { passive: true });
-    domEl.addEventListener('touchmove', handlePointerMove, { passive: true });
-    window.addEventListener('touchend', handlePointerUp);
-    domEl.addEventListener('wheel', handleWheel, { passive: false });
-
-    // --- Window Resize Handling ---
-    const handleResize = () => {
-      if (!container) return;
-      const w = container.clientWidth;
-      const h = container.clientHeight;
-      camera.aspect = w / h;
-      camera.updateProjectionMatrix();
-      renderer.setSize(w, h);
-      composer.setSize(w, h);
-      bloomPass.resolution.set(w, h);
-    };
-
-    const resizeObserver = new ResizeObserver(handleResize);
-    resizeObserver.observe(container);
-
-    // --- Main Animation Loop ---
-    let lastTime = performance.now();
-    let lookX = 0, lookY = 0;
-
+    let raf = 0, last = performance.now(), time = 0, lookX = 0, lookY = 0;
     const animate = (now: number) => {
-      animationFrameRef.current = requestAnimationFrame(animate);
+      raf = requestAnimationFrame(animate);
+      const dt = Math.min((now - last) / 1000, 0.1);
+      last = now;
+      const s = settingsRef.current, lv = live.current;
+      const calm = s.reducedMotion ? 0.4 : 1;
+      lv.pulse = Math.max(0, lv.pulse - dt * 1.8);
+      lv.flash = Math.max(0, lv.flash - dt * 1.5);
+      const thinking = lv.mode === 'thinking';
+      const speed = (thinking ? 1.8 : 1) * calm;
+      time += dt * speed;
+      const col = ORB_COLORS[s.theme] ?? ORB_COLORS.jarvis;
+      U.uPrimary.value.copy(col.primary).lerp(ERROR_COLOR, lv.flash);
+      U.uHot.value.copy(col.hot).lerp(ERROR_COLOR, lv.flash * 0.6);
+      const lvl = lv.mode === 'speaking' ? lv.level : 0;
+      U.uGain.value = (0.8 + lv.pulse * 0.6 + lvl * 0.9 + lv.flash * 0.8 + (thinking ? 0.15 : 0)) * (s.reducedMotion ? 0.9 : 1);
+      U.uTime.value = time;
+      bloom.strength = 0.9 + lvl * 0.5 + lv.flash * 0.6;
 
-      const delta = Math.min((now - lastTime) / 1000, 0.1);
-      lastTime = now;
-
-      const currentSettings = stateRef.current.settings;
-      const speed = currentSettings.expansionSpeed;
-
-      const lv = live.current;
-      lv.pulse = Math.max(0, lv.pulse - delta * 1.8);
-      lv.flash = Math.max(0, lv.flash - delta * 1.5);
-      const calm = currentSettings.reducedMotion ? 0.4 : 1;
-      const modeSpeed = lv.mode === 'thinking' ? 2.2 : lv.mode === 'speaking' ? 1.5 : 1;
-      stateRef.current.time += delta * speed * 0.45 * modeSpeed * calm;
-      const t = stateRef.current.time;
-
-      let expansionPhase = 0;
-
-      if (currentSettings.manualScrub) {
-        expansionPhase = currentSettings.scrubProgress;
-      } else {
-        const rawSin = Math.sin(t - Math.PI / 2);
-        const normalized = (rawSin + 1) / 2;
-        expansionPhase = normalized * normalized * (3 - 2 * normalized);
+      for (let i = 0; i < shells.length; i++) {
+        const sh = shells[i];
+        sh.g.rotateOnAxis(sh.axis, sh.speed * dt * speed);
+        sh.g.scale.setScalar(thinking && !s.reducedMotion ? 1 + Math.sin(time * 2 + sh.phase) * 0.03 : 1);
       }
-
-
-      // Update Arc Reactor 3D Model
-      arcReactor.update(t, expansionPhase);
-
-      // Update Ambient Optical Glare
-      const activeThemeColor = THEMES[currentSettings.theme]?.glowColor ? new THREE.Color(THEMES[currentSettings.theme].glowColor) : themeGlowColor;
-      ambientGlare.update(t, expansionPhase, activeThemeColor);
-
-      // Update Particles
-      particleShaderMat.uniforms.time.value = t;
-      particleShaderMat.uniforms.expansion.value = expansionPhase;
-      particleShaderMat.uniforms.coreColor.value.set(THEMES[currentSettings.theme].coreOuter);
-      particleShaderMat.uniforms.glowColor.value.set(THEMES[currentSettings.theme].glowColor);
-
-      // Light Intensity modulation (scaled gracefully without blowing out)
-      // Live drive: brighter while thinking, amplitude-driven while speaking, red flash on error.
-      const base = lv.mode === 'thinking' ? 0.35 : 0;
-      const drive = (lv.mode === 'speaking' ? lv.level * 1.2 : 0) + lv.pulse * 0.6 + base;
-      const k = drive * calm;
-      coreLight.intensity = (3.2 + expansionPhase * 2.2) * (1 + k) + lv.flash * 6;
-      baseCoreColor.set(THEMES[currentSettings.theme].coreOuter);
-      coreLight.color.copy(baseCoreColor).lerp(errorColor, lv.flash);
-      bloomPass.strength = 0.82 + k * 0.6 + lv.flash * 0.8;
-      shellGroup.scale.setScalar(1 + k * 0.05);
-      ambientWashLight.intensity = 0.3 + expansionPhase * 1.5;
-      ambientLight.intensity = 0.45 + expansionPhase * 0.3;
-
-      // Subtle atmospheric fog color blend
-      if (scene.fog) {
-        (scene.fog as THREE.FogExp2).color.copy(baseFogColor).lerp(leakedFogColor, expansionPhase * 0.6);
+      for (let i = 0; i < rings.length; i++) {
+        rings[i].m.rotation.x += rings[i].wx * dt * speed;
+        rings[i].m.rotation.y += rings[i].wy * dt * speed;
       }
+      const beat = 1 + (s.reducedMotion ? 0 : Math.sin(time * 2.4) * 0.12);
+      dotMat.uniforms.uSize.value = 26 * renderer.getPixelRatio() * beat * (1 + lvl * 0.6);
+      root.scale.setScalar(1 + lvl * 0.08);
 
-      // --- Animate Fragment Shell Shards ---
-      const globalSlowTurn = t * 0.12;
-      shellGroup.rotation.y = globalSlowTurn;
-      shellGroup.rotation.x = Math.sin(t * 0.08) * 0.12;
-      // Look at the user: ease toward the face (max ~0.25 rad); stay centred under reduced motion.
-      const lk = currentSettings.reducedMotion ? { x: 0, y: 0 } : lv.look;
-      const ease = Math.min(1, delta * 3);
+      const lk = s.reducedMotion ? { x: 0, y: 0 } : lv.look;
+      const ease = Math.min(1, dt * 3);
       lookX += (lk.x - lookX) * ease; lookY += (lk.y - lookY) * ease;
-      shellGroup.rotation.y += lookX * 0.25;
-      shellGroup.rotation.x += lookY * 0.25;
+      root.rotation.y = lookX * 0.25;
+      root.rotation.x = lookY * 0.25;
 
-      for (let i = 0; i < fragments.length; i++) {
-        const frag: FragmentMeshInstance = fragments[i];
-
-        const effectivePhase = Math.max(0, Math.min(1, expansionPhase + (frag.phaseOffset - 0.1) * 0.15 * expansionPhase));
-
-        const displacement = frag.direction.clone().multiplyScalar(frag.maxDisplacement * effectivePhase);
-        frag.mesh.position.copy(frag.basePosition).add(displacement);
-
-        const rotAngle = frag.rotationRate * effectivePhase * 1.4;
-        const qRot = new THREE.Quaternion().setFromAxisAngle(frag.rotationAxis, rotAngle);
-        frag.mesh.quaternion.copy(frag.baseQuaternion).multiply(qRot);
-      }
-
-      // --- Animate Particle Dust Drift ---
-      const positions = particleGeo.attributes.position.array as Float32Array;
-      for (let i = 0; i < particleCount; i++) {
-        const i3 = i * 3;
-        positions[i3] += particleVelocities[i3];
-        positions[i3 + 1] += particleVelocities[i3 + 1];
-        positions[i3 + 2] += particleVelocities[i3 + 2];
-
-        const distSq = positions[i3] * positions[i3] + positions[i3 + 1] * positions[i3 + 1] + positions[i3 + 2] * positions[i3 + 2];
-        if (distSq > 36.0 || distSq < 0.6) {
-          const newRadius = 1.2 + Math.random() * 2.8;
-          const u = Math.random();
-          const v = Math.random();
-          const theta = u * 2.0 * Math.PI;
-          const phi = Math.acos(2.0 * v - 1.0);
-          positions[i3] = newRadius * Math.sin(phi) * Math.cos(theta);
-          positions[i3 + 1] = newRadius * Math.sin(phi) * Math.sin(theta);
-          positions[i3 + 2] = newRadius * Math.cos(phi);
-        }
-      }
-      particleGeo.attributes.position.needsUpdate = true;
-
-      // --- Camera Logic ---
-      const pushDistance = 10.5 - expansionPhase * 4.6;
-      const cinematicAngleY = stateRef.current.cameraAngleY + (stateRef.current.isUserInteracting ? 0 : delta * 0.04 * calm);
-      stateRef.current.cameraAngleY = cinematicAngleY;
-      const camX = pushDistance * Math.sin(cinematicAngleY) * Math.cos(stateRef.current.cameraAngleX);
-      const camY = pushDistance * Math.sin(stateRef.current.cameraAngleX) + Math.sin(t * 0.2) * 0.3;
-      const camZ = pushDistance * Math.cos(cinematicAngleY) * Math.cos(stateRef.current.cameraAngleX);
-      camera.position.set(camX, camY, camZ);
-      camera.lookAt(0, 0, 0);
-
-      // Render via post-processing bloom composer
       composer.render();
     };
+    raf = requestAnimationFrame(animate);
 
-    animationFrameRef.current = requestAnimationFrame(animate);
-
-    // Cleanup
     return () => {
-      cancelAnimationFrame(animationFrameRef.current);
-      resizeObserver.disconnect();
-      domEl.removeEventListener('mousedown', handlePointerDown);
-      domEl.removeEventListener('mousemove', handlePointerMove);
-      window.removeEventListener('mouseup', handlePointerUp);
-      domEl.removeEventListener('touchstart', handlePointerDown);
-      domEl.removeEventListener('touchmove', handlePointerMove);
-      window.removeEventListener('touchend', handlePointerUp);
-      domEl.removeEventListener('wheel', handleWheel);
-      arcReactor.dispose();
-      ambientGlare.dispose();
-      studioEnvMap.dispose();
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+      geos.forEach((g) => g.dispose());
+      mats.forEach((m) => m.dispose());
       composer.dispose();
       renderer.dispose();
-      if (container.contains(domEl)) {
-        container.removeChild(domEl);
-      }
+      if (container.contains(renderer.domElement)) container.removeChild(renderer.domElement);
     };
-  }, [settings.theme]);
+  }, [live]);
 
-  return (
-    <div
-      ref={containerRef}
-      id="orb-canvas-container"
-      className={`relative w-full h-full select-none cursor-grab ${isPointerDown ? 'cursor-grabbing' : ''}`}
-    />
-  );
+  return <div ref={containerRef} id="orb-canvas-container" className="relative w-full h-full select-none" />;
 };
