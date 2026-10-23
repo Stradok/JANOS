@@ -1,4 +1,5 @@
 import type { RefObject } from 'react';
+import { PoseLandmarker } from '@mediapipe/tasks-vision';
 import { useEffect, useRef, useState } from 'react';
 import { Vision, VisionFrame } from '../vision';
 import { OrbLive } from '../types';
@@ -70,7 +71,15 @@ export function CameraPanel({ live, onLive, onError, onGreet, onGesture }: Props
       ctx.fillStyle = getComputedStyle(c).getPropertyValue('--accent') || '#4cf';
       for (const p of f.landmarks.face) ctx.fillRect(p.x * c.width - 1, p.y * c.height - 1, 2, 2);
       for (const p of f.landmarks.hand) { ctx.beginPath(); ctx.arc(p.x * c.width, p.y * c.height, 3, 0, 7); ctx.fill(); }
-      setStatus(`FACE ${f.face ? '✓' : '✗'} · ATTENTION ${(f.face?.attention ?? 0).toFixed(2)} · GESTURE ${f.gesture?.name ?? '—'}`);
+      if (f.pose) {
+        ctx.strokeStyle = ctx.fillStyle; ctx.lineWidth = 1;
+        for (const { start, end } of PoseLandmarker.POSE_CONNECTIONS) {
+          const a = f.pose.landmarks[start], b = f.pose.landmarks[end];
+          ctx.beginPath(); ctx.moveTo(a.x * c.width, a.y * c.height); ctx.lineTo(b.x * c.width, b.y * c.height); ctx.stroke();
+        }
+        for (const p of f.pose.landmarks) ctx.fillRect(p.x * c.width - 1, p.y * c.height - 1, 3, 3);
+      }
+      setStatus(`FACE ${f.face ? '✓' : '✗'} · ATTENTION ${(f.face?.attention ?? 0).toFixed(2)} · GESTURE ${f.gesture?.name ?? '—'} · POSTURE ${f.pose?.label ?? '—'}`);
     };
     vision.start(v).then(() => { cb.current.onLive(true); void recognizer.load(); }, (e) => {
       cb.current.onError(`Camera unavailable: ${e instanceof Error ? e.message : e}`);

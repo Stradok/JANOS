@@ -1,10 +1,11 @@
-// Copies the MediaPipe wasm runtime and downloads the two models into public/mediapipe, plus the Human face-recognition models into public/human (served locally, gitignored).
+// Copies the MediaPipe wasm runtime and downloads the three models (face, gesture, pose-lite) into public/mediapipe, plus the Human face-recognition models into public/human (served locally, gitignored).
 import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 
 const base = 'https://storage.googleapis.com/mediapipe-models';
 const models = {
   'face_landmarker.task': `${base}/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
   'gesture_recognizer.task': `${base}/gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task`,
+  'pose_landmarker_lite.task': `${base}/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task`,
 };
 cpSync('node_modules/@mediapipe/tasks-vision/wasm', 'public/mediapipe/wasm', { recursive: true });
 mkdirSync('public/mediapipe/models', { recursive: true });
