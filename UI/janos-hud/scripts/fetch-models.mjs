@@ -1,4 +1,4 @@
-// Copies the MediaPipe wasm runtime and downloads the two models into public/mediapipe (served locally, gitignored).
+// Copies the MediaPipe wasm runtime and downloads the two models into public/mediapipe, plus the Human face-recognition models into public/human (served locally, gitignored).
 import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 
 const base = 'https://storage.googleapis.com/mediapipe-models';
@@ -14,5 +14,19 @@ for (const [name, url] of Object.entries(models)) {
   const r = await fetch(url);
   if (!r.ok) throw new Error(`${url}: HTTP ${r.status}`);
   writeFileSync(dest, Buffer.from(await r.arrayBuffer()));
+  console.log('downloaded', name);
+}
+
+// Human face recognition: detector + mesh + faceres embedding (the exact files recognize.ts's config requests).
+const human = 'https://vladmandic.github.io/human-models/models';
+mkdirSync('public/human', { recursive: true });
+for (const name of ['blazeface', 'facemesh', 'faceres'].flatMap((m) => [`${m}.json`, `${m}.bin`])) {
+  const dest = `public/human/${name}`;
+  if (existsSync(dest)) continue;
+  const r = await fetch(`${human}/${name}`);
+  if (!r.ok) throw new Error(`${human}/${name}: HTTP ${r.status}`);
+  const buf = Buffer.from(await r.arrayBuffer());
+  if (!buf.length) throw new Error(`${name}: empty`);
+  writeFileSync(dest, buf);
   console.log('downloaded', name);
 }

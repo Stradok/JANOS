@@ -125,14 +125,14 @@ export default function App() {
     setTimeout(() => { if (live.current.mode === 'error') live.current.mode = 'idle'; }, 1200);
   };
 
-  const send = async (greeting = false, spoken = '') => {
-    const text = greeting ? GREETING : (spoken || input.trim());
+  const send = async (greeting = false, spoken = '', name: string | null = null) => {
+    const text = greeting ? (name ? `The user ${name} just sat down in front of you. Greet them by name, briefly, by time of day, in one sentence.` : GREETING) : (spoken || input.trim());
     if (!text || busy) return;
     unlockAudio();
     stopAudio();
     if (!greeting && !spoken) setInput('');
     setBusy(true); setStages([]);
-    setMsgs((m) => [...m, greeting ? { who: 'presence', text: '◇ presence detected' } : { who: 'you', text }]);
+    setMsgs((m) => [...m, greeting ? { who: 'presence', text: name ? `◇ ${name} recognised` : '◇ presence detected' } : { who: 'you', text }]);
     live.current.mode = 'thinking'; live.current.pulse = 1;
     const ac = new AbortController(); abort.current = ac;
     let answer = '', failed = false;
@@ -293,7 +293,7 @@ export default function App() {
             </div>
           </Panel>
         {camOn && (
-            <CameraPanel live={live} onLive={setCamLive} onGreet={() => void send(true)} onGesture={onGesture}
+            <CameraPanel live={live} onLive={setCamLive} onGreet={(name) => void send(true, '', name)} onGesture={onGesture}
               onError={(t) => { setCamOn(false); setMsgs((m) => [...m, { who: 'sys', text: t }]); }} />
         )}
           </div>
