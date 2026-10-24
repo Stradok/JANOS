@@ -258,10 +258,11 @@ class DesktopError(Exception):
     """A refused or failed desktop action; Toolbox.run reports it as a failed result."""
 
 
-_APP_DIRS = [Path(p).expanduser() for p in (
+# Root-owned dirs only: user-writable ones (~/.local/share/...) are excluded on purpose,
+# because the agent can write there and gtk-launch would run its Exec= outside the sandbox.
+_APP_DIRS = [Path(p) for p in (
     "/usr/share/applications", "/var/lib/snapd/desktop/applications",
-    "~/.local/share/applications", "/var/lib/flatpak/exports/share/applications",
-    "~/.local/share/flatpak/exports/share/applications")]
+    "/var/lib/flatpak/exports/share/applications")]
 _URL_SCHEMES = ("http", "https", "spotify")
 _MEDIA = {"play": "Play", "pause": "Pause", "play_pause": "PlayPause",
           "next": "Next", "previous": "Previous"}
@@ -700,6 +701,11 @@ class Toolbox:
             if not (target.is_relative_to(ws) or target.is_relative_to(home)):
                 return (f"Refused: {target} is outside the workspace and your home "
                         f"directory. Use a bare filename to write into {ws}.")
+            # Dotfiles/dot-dirs in home (.bashrc, .config, .local, .ssh) can run code
+            # outside the sandbox later, so they are off limits unless inside the workspace.
+            if not target.is_relative_to(ws) and target.relative_to(home).parts[0].startswith("."):
+                return (f"Refused: {target} is a hidden file or folder in your home directory. "
+                        f"Use a bare filename to write into {ws}.")
             try:
                 p.parent.mkdir(parents=True, exist_ok=True)
                 with open(p, "a" if append else "w", encoding="utf-8") as fh:
@@ -911,7 +917,12 @@ class Toolbox:
                 else:
                     if not u.hostname or u.username or u.password or "@" in u.netloc:
                         raise DesktopError("Refused: URL needs a host and no embedded credentials.")
-                    # ponytail: the browser re-resolves the host, so a DNS-rebinding race remains.
+                    host = u.hostname.lower().rstrip(".")
+                    allowed = [d.strip().lower() for d in cfg.desktop_hosts.split(",") if d.strip()]
+                    if not any(host == d or host.endswith("." + d) for d in allowed):
+                        raise DesktopError(f"Refused: {host} is not on the allowed host list "
+                                           f"(config desktop_hosts / JANOS_DESKTOP_HOSTS: {', '.join(allowed) or 'empty'}).")
+                    # Second layer; the allowlist above is what stops DNS rebinding, since the browser re-resolves.
                     why = (await _resolve_public(u.hostname))[1]
                     if why:
                         raise DesktopError(f"Refused: internal or unresolvable target ({why}).")
@@ -944,7 +955,7 @@ class Toolbox:
              {"fmt": "str (optional strftime)"}, now, False),
             ("system_info", "Report CPU, RAM, disk and GPU status.",
              {"what": "str: all|cpu|memory|disk|gpu"}, system_info, False),
-            ("desktop", "Control the user's desktop (outside the sandbox): action=open_app name=<app name> launches an installed app; action=open_url url=<http(s)/spotify URL>; action=media command=play|pause|play_pause|next|previous|status controls the running music player.",
+            ("desktop", "Control the user's desktop (outside the sandbox): action=open_app name=<app name> launches an installed app; action=open_url url=<spotify URI or http(s) URL on an allowed site>; action=media command=play|pause|play_pause|next|previous|status controls the running music player.",
              {"action": "str: open_app|open_url|media", "name": "str (open_app)", "url": "str (open_url)",
               "command": "str (media)"}, desktop, True),
             ("recall_memory", "Search past conversations and results.",

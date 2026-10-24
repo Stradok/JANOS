@@ -67,6 +67,7 @@ class Config:
     sandbox: bool = True        # run shell / run_python / smoke tests inside bubblewrap
     shell_network: bool = False # let the sandboxed shell reach the network and localhost
     desktop: bool = True        # the `desktop` tool: open apps/URLs and control media outside the sandbox
+    desktop_hosts: str = "youtube.com,spotify.com,wikipedia.org,github.com"  # http(s) hosts open_url may open (and their subdomains); empty = none
 
     # --- Employees (janos/employee.py) ---
     employee_cli: str = ""      # coding CLI binary; empty = auto-detect OpenCode
@@ -84,7 +85,7 @@ class Config:
     brave_api_key: str = ""
 
     def __post_init__(self) -> None:
-        for f in ("model", "ollama_url", "persona", "keep_alive", "employee_cli", "employee_model"):
+        for f in ("model", "ollama_url", "persona", "keep_alive", "employee_cli", "employee_model", "desktop_hosts"):
             setattr(self, f, _env(f, getattr(self, f)))
         for f in ("timeout", "num_ctx", "max_steps", "max_heal_attempts",
                   "agent_max_turns", "recall_k", "lesson_k", "shell_timeout", "employee_timeout"):

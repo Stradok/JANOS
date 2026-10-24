@@ -503,15 +503,41 @@ async def test_desktop() -> None:
         bad = ["file:///etc/passwd", "javascript:alert(1)", "data:text/html,x", "ftp://example.com/x",
                "chrome://settings", "http://127.0.0.1:8000/", "http://169.254.169.254/", "http://[::1]/",
                "https://example.com/a\nb", "https://user:pass@example.com/", "-oProxyCommand=x", "https://exa mple.com"]
+        # allow the hosts so the second layer (internal-address check) is what rejects them
+        default_hosts, cfg.desktop_hosts = cfg.desktop_hosts, "example.com,127.0.0.1,169.254.169.254,::1"
         got = [await run(action="open_url", url=u) for u in bad]
+        cfg.desktop_hosts = default_hosts
         check("open_url rejects bad schemes, internal hosts, credentials, control chars",
               all(not r.ok for r in got) and not spawned, str([(u, r.output[:50]) for u, r in zip(bad, got) if r.ok]))
         now[0] += 61
         r1 = await run(action="open_url", url="spotify:track:4uLU6hMCjMI75M1A2tKUQC")
-        r2 = await run(action="open_url", url="https://example.com")
+        r2 = await run(action="open_url", url="https://www.youtube.com/watch?v=x")
         check("open_url accepts spotify and https, argv list exact",
               r1.ok and r2.ok and spawned == [["xdg-open", "spotify:track:4uLU6hMCjMI75M1A2tKUQC"],
-                                              ["xdg-open", "https://example.com"]], str(spawned))
+                                              ["xdg-open", "https://www.youtube.com/watch?v=x"]], str(spawned))
+
+        # host allowlist (config desktop_hosts); matches on label boundaries
+        spawned.clear()
+        now[0] += 61
+        ok_u = ["https://youtube.com/x", "https://www.youtube.com/x"]
+        no_u = ["https://evilyoutube.com/", "https://youtube.com.evil.io/", "https://example.com/"]
+        got_ok = [await run(action="open_url", url=u) for u in ok_u]
+        now[0] += 61
+        got_no = [await run(action="open_url", url=u) for u in no_u]
+        check("open_url allows the default hosts and their subdomains", all(r.ok for r in got_ok), str([r.output for r in got_ok]))
+        check("open_url refuses lookalike and unlisted hosts, naming the config var",
+              all(not r.ok and "desktop_hosts" in r.output and "not on the allowed" in r.output for r in got_no)
+              and len(spawned) == 2, str([r.output[:60] for r in got_no]))
+        spawned.clear()
+        now[0] += 61
+        cfg.desktop_hosts = " Example.COM , "
+        r_custom = await run(action="open_url", url="https://example.com/")
+        cfg.desktop_hosts = ""
+        r_empty = await run(action="open_url", url="https://www.youtube.com/")
+        r_spot = await run(action="open_url", url="spotify:track:abc")
+        cfg.desktop_hosts = default_hosts
+        check("desktop_hosts is whitespace/case tolerant; empty refuses http(s) but not spotify",
+              r_custom.ok and not r_empty.ok and r_spot.ok, f"{r_custom.output} | {r_empty.output} | {r_spot.output}")
 
         # open_app
         spawned.clear()
@@ -534,6 +560,43 @@ async def test_desktop() -> None:
             outs = [await run(action="open_app", name=n) for n in ("../../bin/sh", "-x", "/usr/bin/sh", "ghost", "")]
             check("open_app refuses paths, flags, hidden entries", all(not r.ok for r in outs) and not spawned,
                   str([r.output[:40] for r in outs]))
+
+        # sandbox escape: agent-writable launcher dirs must not be searched; dotfiles in home not writable
+        home_dirs = [d for d in orig[1] if Path(d).is_relative_to(Path("~").expanduser())]
+        check("default _APP_DIRS has no user-writable path under home", not home_dirs and orig[1], str(home_dirs))
+        real_home, real_ws = os.environ.get("HOME"), cfg.workspace
+        with tempfile.TemporaryDirectory() as th:
+            hm = Path(th).resolve()
+            os.environ["HOME"] = str(hm)
+            try:
+                cfg.workspace = hm / "Desktop" / "ws"
+                cfg.workspace.mkdir(parents=True)
+                refused = [".local/share/applications/x.desktop", ".bashrc",
+                           ".config/autostart/x.desktop", ".ssh/authorized_keys"]
+                outs = [await tb.run("write_file", {"path": str(hm / r), "content": "x"}) for r in refused]
+                check("write_file refuses hidden files and dirs in home",
+                      all("Refused" in o.output for o in outs) and not any((hm / r).exists() for r in refused),
+                      str([o.output[:60] for o in outs]))
+                outs = [await tb.run("write_file", {"path": str(hm / ".config" / "x"), "content": "x"}) ,
+                        await tb.run("write_file", {"path": str(cfg.workspace / ".." / ".." / ".bashrc"), "content": "x"})]
+                check("write_file hidden check survives .. traversal", all("Refused" in o.output for o in outs),
+                      str([o.output[:60] for o in outs]))
+                r_doc = await tb.run("write_file", {"path": str(hm / "Documents" / "a.txt"), "content": "x"})
+                r_ws = await tb.run("write_file", {"path": "w.txt", "content": "x"})
+                check("write_file still allows non-hidden home files and the workspace",
+                      (hm / "Documents" / "a.txt").exists() and (cfg.workspace / "w.txt").exists(),
+                      f"{r_doc.output} | {r_ws.output}")
+                cfg.workspace = hm / ".janos" / "ws"
+                cfg.workspace.mkdir(parents=True)
+                r_hws = await tb.run("write_file", {"path": "w.txt", "content": "x"})
+                check("write_file allows a workspace that itself sits under a hidden dir",
+                      (cfg.workspace / "w.txt").exists(), r_hws.output)
+            finally:
+                cfg.workspace = real_ws
+                if real_home is None:
+                    os.environ.pop("HOME", None)
+                else:
+                    os.environ["HOME"] = real_home
 
         # media
         calls: list[list[str]] = []
