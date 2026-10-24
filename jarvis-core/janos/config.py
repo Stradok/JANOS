@@ -66,6 +66,7 @@ class Config:
     allow_shell: bool = True
     sandbox: bool = True        # run shell / run_python / smoke tests inside bubblewrap
     shell_network: bool = False # let the sandboxed shell reach the network and localhost
+    desktop: bool = True        # the `desktop` tool: open apps/URLs and control media outside the sandbox
 
     # --- Employees (janos/employee.py) ---
     employee_cli: str = ""      # coding CLI binary; empty = auto-detect OpenCode
@@ -90,7 +91,7 @@ class Config:
             setattr(self, f, _env(f, getattr(self, f)))
         for f in ("temperature", "min_pass_score", "wake_threshold", "rl_explore", "rl_explore_auto"):
             setattr(self, f, _env(f, getattr(self, f)))
-        for f in ("learn", "allow_shell", "sandbox", "shell_network", "rl_policy", "fast_verify"):
+        for f in ("learn", "allow_shell", "sandbox", "shell_network", "desktop", "rl_policy", "fast_verify"):
             setattr(self, f, _env(f, getattr(self, f)))
 
         key = os.environ.get("JANOS_BRAVE_API_KEY") or os.environ.get("BRAVE_API_KEY") or ""

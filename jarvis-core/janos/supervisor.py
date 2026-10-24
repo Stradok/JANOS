@@ -478,6 +478,15 @@ Request: {task}
         if re.search(r"(?<![\w.])\d+(?:\.\d+)?\s*[+*/×^]\s*\d"
                      r"|\d\s+[-x]\s+\d|\bpercent of\b|%\s*of\b", arith):
             needed.add("calculate")
+        # Opening apps/URLs and driving music need the desktop tool: the shell
+        # sandbox has no display, so improvising with shell can only fail or lie.
+        if re.search(
+            r"\b(open|launch|start)\b[^.!?]{0,30}\b(app|application|spotify|firefox|chrome|chromium|"
+            r"browser|vlc|steam|discord|terminal)\b|\bopen\b[^.!?]{0,20}(https?://|www\.|spotify:)"
+            r"|\b(play|pause|resume|skip|stop)\b[^.!?]{0,40}\b(songs?|music|tracks?|playlist|album|spotify)\b"
+            r"|\b(next|previous) (song|track)\b|\bplay\b[^.!?]{0,40}\bon (spotify|youtube)\b", low
+        ):
+            needed.add("desktop")
         # An explicit request to build a tool must reach create_tool. Left alone
         # the agent writes Python that *describes* a tool and calls it done.
         if "create_tool" in low or re.search(
@@ -516,6 +525,8 @@ Request: {task}
         "system_info": "Inspect this machine and report the real CPU, RAM, disk and GPU figures.",
         "web_search": "Search the web for the information this request needs.",
         "write_file": "Write the result to the file named in the request.",
+        "desktop": "Call the desktop tool to do what the request asks (open_app, open_url or media), "
+                   "then report only what it actually returned.",
         "create_tool": "Call the create_tool tool to build the tool this request asks for, "
                        "then call the tool it returns to prove it works.",
     }

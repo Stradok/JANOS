@@ -26,6 +26,8 @@ import socket
 import subprocess
 import sys
 import textwrap
+import time
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from html.parser import HTMLParser
@@ -229,6 +231,163 @@ _SHELL_DENY = re.compile(
 )
 
 
+def _bad_ip(ip: Any) -> bool:
+    return (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+            or ip.is_multicast or ip.is_unspecified or not ip.is_global)
+
+async def _resolve_public(host: str) -> tuple[str, str]:
+    """Resolve once. Returns (first_ip, '') if EVERY address is public, else ('', reason)."""
+    try:
+        infos = await asyncio.to_thread(socket.getaddrinfo, host, None)
+    except (OSError, UnicodeError) as e:
+        return "", f"cannot resolve {host!r}: {e}"
+    ips = [ipaddress.ip_address(i[4][0].split("%")[0]) for i in infos]
+    for ip in ips:
+        if _bad_ip(ip):
+            return "", f"{host} resolves to internal address {ip}"
+    return (str(ips[0]), "") if ips else ("", f"{host!r} has no address")
+
+
+# ------------------------------------------------------------------ desktop
+# BOUNDARY: this tool runs OUTSIDE the shell sandbox on purpose (the sandbox has no
+# display, no session bus). It is safe only because it is scoped to three allowlisted
+# actions: launch a .desktop app by id, open an http(s)/spotify URL, send an MPRIS
+# media command. No shell, no model-supplied flags or paths, rate limited.
+
+class DesktopError(Exception):
+    """A refused or failed desktop action; Toolbox.run reports it as a failed result."""
+
+
+_APP_DIRS = [Path(p).expanduser() for p in (
+    "/usr/share/applications", "/var/lib/snapd/desktop/applications",
+    "~/.local/share/applications", "/var/lib/flatpak/exports/share/applications",
+    "~/.local/share/flatpak/exports/share/applications")]
+_URL_SCHEMES = ("http", "https", "spotify")
+_MEDIA = {"play": "Play", "pause": "Pause", "play_pause": "PlayPause",
+          "next": "Next", "previous": "Previous"}
+_RATE_MAX, _RATE_WINDOW = 6, 60.0
+_desktop_calls: deque[float] = deque()
+_clock = time.monotonic   # tests replace this
+_ENV_KEEP = ("HOME", "PATH", "DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY",
+             "DBUS_SESSION_BUS_ADDRESS", "LANG")
+
+
+def _gui_env() -> dict[str, str]:
+    """Only what a GUI app / gdbus needs from the server's environment; no secrets."""
+    env = {k: v for k, v in os.environ.items() if k in _ENV_KEEP or k.startswith("XDG_")}
+    env["PATH"] = env.get("PATH", "/usr/bin:/bin") + ":/snap/bin"
+    return env
+
+
+def _desktop_rate_ok() -> bool:
+    now = _clock()
+    while _desktop_calls and now - _desktop_calls[0] > _RATE_WINDOW:
+        _desktop_calls.popleft()
+    if len(_desktop_calls) >= _RATE_MAX:
+        return False
+    _desktop_calls.append(now)
+    return True
+
+
+def _spawn(argv: list[str]) -> str:
+    """Start argv detached (no shell). Returns '' on success, else an error message."""
+    try:
+        p = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True, env=_gui_env())
+    except OSError as e:
+        return f"cannot run {argv[0]}: {e}"
+    try:
+        rc = p.wait(timeout=2)   # a launcher that fails does so at once; a running app is success
+    except subprocess.TimeoutExpired:
+        return ""
+    return "" if rc == 0 else f"{argv[0]} exited with status {rc}"
+
+
+def _gdbus(args: list[str]) -> tuple[int, str]:
+    """Run gdbus on the session bus (argv list, no shell). Returns (status, output)."""
+    try:
+        p = subprocess.run(["gdbus", *args], capture_output=True, text=True, timeout=5,
+                           stdin=subprocess.DEVNULL, env=_gui_env())
+    except (OSError, subprocess.SubprocessError) as e:
+        return 1, str(e)
+    return p.returncode, (p.stdout if p.returncode == 0 else p.stderr or p.stdout).strip()
+
+
+def _desktop_entries() -> dict[str, str]:
+    """{desktop-id: Name} for launchable apps. The first directory to define an id wins."""
+    out: dict[str, str] = {}
+    for d in _APP_DIRS:
+        for f in sorted(d.glob("*.desktop")):
+            if f.stem.startswith("-") or f.stem in out:
+                continue
+            try:
+                text = f.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            entry = re.search(r"^\[Desktop Entry\]\s*$(.*?)(?=^\[|\Z)", text, re.S | re.M)
+            if not entry:
+                continue
+            kv = dict(l.split("=", 1) for l in entry.group(1).splitlines() if "=" in l and not l.startswith("#"))
+            if kv.get("Type", "Application") != "Application" or kv.get("NoDisplay", "").lower() == "true" \
+                    or kv.get("Hidden", "").lower() == "true":
+                continue
+            out[f.stem] = kv.get("Name", "").strip()
+    return out
+
+
+def _find_app(name: str) -> str:
+    """Resolve a user-facing app name to exactly one desktop id, or raise with candidates."""
+    q = name.strip().lower()
+    if not re.fullmatch(r"\w[\w .+&'-]{0,63}", q):
+        raise DesktopError(f"Refused: {name!r} is not a valid app name.")
+    entries = _desktop_entries()
+    exact = [i for i, n in entries.items() if q in (i.lower(), n.lower())]
+    hits = exact or [i for i, n in entries.items() if q in i.lower() or q in n.lower()]
+    if not hits:
+        raise DesktopError(f"No installed app matches {name!r}.")
+    if len(hits) > 1:
+        raise DesktopError(f"{name!r} is ambiguous; candidates: "
+                           + ", ".join(f"{i} ({entries[i]})" for i in hits[:10]))
+    return hits[0]
+
+
+def _player(names_out: str) -> str:
+    names = re.findall(r"org\.mpris\.MediaPlayer2\.[\w.\-]+", names_out)
+    if not names:
+        raise DesktopError("No media player running; use open_app first (e.g. name='spotify').")
+    return next((n for n in names if "spotify" in n.lower()), names[0])
+
+
+def _media(command: str) -> str:
+    if command not in _MEDIA and command != "status":
+        raise DesktopError(f"Unknown media command {command!r}. Use: play, pause, play_pause, next, previous, status.")
+    rc, out = _gdbus(["call", "--session", "--dest", "org.freedesktop.DBus",
+                      "--object-path", "/org/freedesktop/DBus",
+                      "--method", "org.freedesktop.DBus.ListNames"])
+    if rc != 0:
+        raise DesktopError(f"Cannot reach the desktop session bus: {out[:160]}")
+    bus = _player(out)
+    base = ["call", "--session", "--dest", bus, "--object-path", "/org/mpris/MediaPlayer2", "--method"]
+    if command != "status":
+        rc, out = _gdbus(base + ["org.mpris.MediaPlayer2.Player." + _MEDIA[command]])
+        if rc != 0:
+            raise DesktopError(f"{command} failed on {bus}: {out[:160]}")
+        return f"Sent {command} to {bus}."
+    get = base + ["org.freedesktop.DBus.Properties.Get", "org.mpris.MediaPlayer2.Player"]
+    rc, st = _gdbus(get + ["PlaybackStatus"])
+    if rc != 0:
+        raise DesktopError(f"status failed on {bus}: {st[:160]}")
+    line = f"{bus}: {(re.search(r'<.(.*?).>', st) or [0, st])[1]}"
+    rc, md = _gdbus(get + ["Metadata"])
+    if rc == 0:
+        title = re.search(r"'xesam:title': <(['\"])(.*?)\1>", md)
+        artist = re.search(r"'xesam:artist': <\[(.*?)\]>", md)
+        if title:
+            by = " - " + ", ".join(a[0] or a[1] for a in re.findall(r"'([^']*)'|\"([^\"]*)\"", artist.group(1))) if artist else ""
+            line += f"; track: {title.group(2)}{by}"
+    return line
+
+
 class Toolbox:
     def __init__(self, config: Config, memory: Any = None):
         self.config = config
@@ -422,22 +581,6 @@ class Toolbox:
                 body = p.text()
             body = html.unescape(body)
             return f"[{url}]\n{body[:max(500, max_chars)]}"
-
-        def _bad_ip(ip: Any) -> bool:
-            return (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
-                    or ip.is_multicast or ip.is_unspecified or not ip.is_global)
-
-        async def _resolve_public(host: str) -> tuple[str, str]:
-            """Resolve once. Returns (first_ip, '') if EVERY address is public, else ('', reason)."""
-            try:
-                infos = await asyncio.to_thread(socket.getaddrinfo, host, None)
-            except (OSError, UnicodeError) as e:
-                return "", f"cannot resolve {host!r}: {e}"
-            ips = [ipaddress.ip_address(i[4][0].split("%")[0]) for i in infos]
-            for ip in ips:
-                if _bad_ip(ip):
-                    return "", f"{host} resolves to internal address {ip}"
-            return (str(ips[0]), "") if ips else ("", f"{host!r} has no address")
 
         async def browser_fetch(url: str = "", max_chars: int = 3000, wait_ms: int = 1500) -> str:
             if not url.strip():
@@ -744,6 +887,40 @@ class Toolbox:
                 fh.write(f"\n## {title or 'Note'} — {stamp}\n{body}\n")
             return f"Saved note {title!r} to {notes}"
 
+        async def desktop(action: str = "", name: str = "", url: str = "", command: str = "") -> str:
+            if not cfg.desktop:
+                raise DesktopError("Desktop control is disabled in config (desktop: false).")
+            action = action.strip().lower()
+            if action not in ("open_app", "open_url", "media"):
+                raise DesktopError("action must be open_app, open_url or media.")
+            if not _desktop_rate_ok():
+                raise DesktopError(f"Refused: more than {_RATE_MAX} desktop actions in a minute. Wait and stop repeating.")
+            if action == "media":
+                return await asyncio.to_thread(_media, command.strip().lower())
+            if action == "open_app":
+                app = _find_app(name)
+                argv, done = ["gtk-launch", app], f"Launched {app}."
+            else:
+                url = url.strip()
+                u = urlparse(url)
+                if re.search(r"[\x00-\x20\x7f\\]", url) or u.scheme not in _URL_SCHEMES:
+                    raise DesktopError("Refused: only http, https and spotify URLs without spaces or control characters.")
+                if u.scheme == "spotify":
+                    if not re.fullmatch(r"spotify:[\w:./%-]{1,200}", url):
+                        raise DesktopError("Refused: malformed spotify URI.")
+                else:
+                    if not u.hostname or u.username or u.password or "@" in u.netloc:
+                        raise DesktopError("Refused: URL needs a host and no embedded credentials.")
+                    # ponytail: the browser re-resolves the host, so a DNS-rebinding race remains.
+                    why = (await _resolve_public(u.hostname))[1]
+                    if why:
+                        raise DesktopError(f"Refused: internal or unresolvable target ({why}).")
+                argv, done = ["xdg-open", url], f"Opened {url}."
+            err = await asyncio.to_thread(_spawn, argv)
+            if err:
+                raise DesktopError(err)
+            return done
+
         spec: list[tuple] = [
             ("web_search", "Search the web for current information.",
              {"query": "str", "max_results": "int=5"}, web_search, False),
@@ -767,6 +944,9 @@ class Toolbox:
              {"fmt": "str (optional strftime)"}, now, False),
             ("system_info", "Report CPU, RAM, disk and GPU status.",
              {"what": "str: all|cpu|memory|disk|gpu"}, system_info, False),
+            ("desktop", "Control the user's desktop (outside the sandbox): action=open_app name=<app name> launches an installed app; action=open_url url=<http(s)/spotify URL>; action=media command=play|pause|play_pause|next|previous|status controls the running music player.",
+             {"action": "str: open_app|open_url|media", "name": "str (open_app)", "url": "str (open_url)",
+              "command": "str (media)"}, desktop, True),
             ("recall_memory", "Search past conversations and results.",
              {"query": "str", "limit": "int=4"}, recall_memory, False),
             ("save_note", "Persist a note for later recall.",

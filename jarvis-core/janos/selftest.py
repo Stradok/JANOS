@@ -156,6 +156,11 @@ def test_capability_guard() -> None:
         ("read notes.md and tell me what it says", set()),
         ("look up the weather in Islamabad", {"web_search"}),
         ("how much RAM am I using", {"system_info"}),
+        ("play a song on Spotify", {"desktop"}),
+        ("open spotify", {"desktop"}),
+        ("skip this song", {"desktop"}),
+        ("open https://example.com", {"desktop"}),
+        ("open the file notes.md", set()),
     ]
     ok = True
     for task, want in cases:
@@ -461,6 +466,126 @@ async def test_sandbox() -> None:
     check("run_python has no network", "NET BLOCKED" in r.output, r.output)
     check("run_python cannot see home folder", "SECRET False" in r.output, r.output)
     check("run_python can import venv packages", "PKG OK" in r.output, r.output)
+    # snap apps live in /snap/bin; seeing them must not widen anything else.
+    pre = sandbox.prefix(cfg, "observe")
+    p = subprocess.run([*pre, "sh", "-c", f"echo $PATH; echo DISPLAY=${{DISPLAY:-unset}}; test -e {secret} && echo VISIBLE || echo HIDDEN"],
+                       capture_output=True, text=True)
+    path, display, hidden = (p.stdout.splitlines() + ["", "", ""])[:3]
+    check("observe PATH includes /snap/bin", "/snap/bin" in path.split(":"), path)
+    if Path("/snap/bin/spotify").exists():
+        p = subprocess.run([*pre, "sh", "-c", "which spotify"], capture_output=True, text=True)
+        check("sandbox finds snap apps (which spotify)", p.stdout.strip() == "/snap/bin/spotify", p.stdout + p.stderr)
+    check("snap PATH leaves DISPLAY unset and $HOME hidden", display == "DISPLAY=unset" and hidden == "HIDDEN", f"{display} {hidden}")
+
+
+async def test_desktop() -> None:
+    section("Desktop tool (spawn, gdbus and DNS mocked)")
+    from janos import tools as T
+    cfg = Config.load()
+    tb = Toolbox(cfg)
+    spawned: list[list[str]] = []
+    orig = (T._spawn, T._APP_DIRS, T._resolve_public, T._clock, T._gdbus)
+    T._spawn = lambda argv: spawned.append(list(argv)) or ""
+    async def fake_resolve(host: str) -> tuple[str, str]:
+        import ipaddress
+        try:
+            ip = ipaddress.ip_address(host.strip("[]"))
+        except ValueError:
+            return "93.184.216.34", ""
+        return ("", f"{host} is internal") if T._bad_ip(ip) else (str(ip), "")
+    T._resolve_public = fake_resolve
+    T._desktop_calls.clear()
+    now = [1000.0]
+    T._clock = lambda: now[0]
+    run = lambda **a: tb.run("desktop", a)
+    try:
+        # open_url
+        bad = ["file:///etc/passwd", "javascript:alert(1)", "data:text/html,x", "ftp://example.com/x",
+               "chrome://settings", "http://127.0.0.1:8000/", "http://169.254.169.254/", "http://[::1]/",
+               "https://example.com/a\nb", "https://user:pass@example.com/", "-oProxyCommand=x", "https://exa mple.com"]
+        got = [await run(action="open_url", url=u) for u in bad]
+        check("open_url rejects bad schemes, internal hosts, credentials, control chars",
+              all(not r.ok for r in got) and not spawned, str([(u, r.output[:50]) for u, r in zip(bad, got) if r.ok]))
+        now[0] += 61
+        r1 = await run(action="open_url", url="spotify:track:4uLU6hMCjMI75M1A2tKUQC")
+        r2 = await run(action="open_url", url="https://example.com")
+        check("open_url accepts spotify and https, argv list exact",
+              r1.ok and r2.ok and spawned == [["xdg-open", "spotify:track:4uLU6hMCjMI75M1A2tKUQC"],
+                                              ["xdg-open", "https://example.com"]], str(spawned))
+
+        # open_app
+        spawned.clear()
+        now[0] += 61
+        with tempfile.TemporaryDirectory() as tmp:
+            for stem, name in (("spotify_spotify", "Spotify"), ("foo-a", "Foo A"), ("foo-b", "Foo B")):
+                (Path(tmp) / f"{stem}.desktop").write_text(f"[Desktop Entry]\nType=Application\nName={name}\nExec=true\n")
+            (Path(tmp) / "hidden.desktop").write_text("[Desktop Entry]\nType=Application\nName=Ghost\nNoDisplay=true\n")
+            T._APP_DIRS = [Path(tmp)]
+            r = await run(action="open_app", name="spotify")
+            check("open_app resolves an exact name to gtk-launch argv",
+                  r.ok and spawned == [["gtk-launch", "spotify_spotify"]], f"{r.output} {spawned}")
+            spawned.clear()
+            r = await run(action="open_app", name="foo")
+            check("open_app refuses ambiguity and lists candidates",
+                  not r.ok and "foo-a" in r.output and "foo-b" in r.output and not spawned, r.output)
+            r = await run(action="open_app", name="nonexistent app")
+            check("open_app unknown app fails", not r.ok and not spawned, r.output)
+            now[0] += 61
+            outs = [await run(action="open_app", name=n) for n in ("../../bin/sh", "-x", "/usr/bin/sh", "ghost", "")]
+            check("open_app refuses paths, flags, hidden entries", all(not r.ok for r in outs) and not spawned,
+                  str([r.output[:40] for r in outs]))
+
+        # media
+        calls: list[list[str]] = []
+        names = {"out": "([':1.1', 'org.mpris.MediaPlayer2.vlc', 'org.mpris.MediaPlayer2.spotify'],)"}
+        def fake_gdbus(args: list[str]) -> tuple[int, str]:
+            calls.append(args)
+            if "ListNames" in args[-1]:
+                return 0, names["out"]
+            if "PlaybackStatus" in args:
+                return 0, "(<'Playing'>,)"
+            if "Metadata" in args:
+                return 0, "(<{'xesam:title': <'Song'>, 'xesam:artist': <['Band']>}>,)"
+            return 0, "()"
+        T._gdbus = fake_gdbus
+        now[0] += 61
+        r = await run(action="media", command="rm -rf /")
+        check("media rejects an unknown command", not r.ok and not calls, r.output)
+        r = await run(action="media", command="play_pause")
+        check("media prefers spotify and calls the MPRIS method",
+              r.ok and calls[-1][-1] == "org.mpris.MediaPlayer2.Player.PlayPause"
+              and "org.mpris.MediaPlayer2.spotify" in calls[-1], str(calls[-1]))
+        r = await run(action="media", command="status")
+        check("media status reports state and track", r.ok and "Playing" in r.output and "Song - Band" in r.output, r.output)
+        names["out"] = "([':1.1', 'org.freedesktop.DBus'],)"
+        r = await run(action="media", command="play")
+        check("media without a player says so", not r.ok and "No media player running" in r.output, r.output)
+
+        # rate limit
+        T._desktop_calls.clear()
+        names["out"] = "([':1.1', 'org.mpris.MediaPlayer2.spotify'],)"
+        results = [await run(action="media", command="status") for _ in range(8)]
+        check("rate limit refuses the 7th call in a minute",
+              all(r.ok for r in results[:6]) and all(not r.ok and "Refused" in r.output for r in results[6:]),
+              str([r.output[:30] for r in results]))
+        now[0] += 61
+        r = await run(action="media", command="status")
+        check("rate limit window rolls over", "Refused" not in r.output, r.output)
+
+        # config flag
+        T._desktop_calls.clear()
+        cfg.desktop = False
+        r = await run(action="open_url", url="https://example.com")
+        cfg.desktop = True
+        check("desktop=false refuses", not r.ok and "disabled" in r.output, r.output)
+    finally:
+        T._spawn, T._APP_DIRS, T._resolve_public, T._clock, T._gdbus = orig
+        T._desktop_calls.clear()
+
+    from janos.playbooks import FORBIDDEN_STEP_TOOLS
+    check("desktop is not allowed in playbook steps", "desktop" in FORBIDDEN_STEP_TOOLS)
+    env = T._gui_env()
+    check("desktop env carries no secrets", not any(k for k in env if "KEY" in k or "TOKEN" in k or k.startswith("JANOS")))
 
 
 async def test_playbooks() -> None:
@@ -905,6 +1030,7 @@ async def main_async() -> int:
     test_autonomy()
     await test_tools()
     await test_sandbox()
+    await test_desktop()
     await test_playbooks()
     await test_voice()
     test_policy()

@@ -118,8 +118,11 @@ DEFAULT_AGENTS: list[Agent] = [
         name="operator",
         role="system operator",
         purpose="Inspect and operate this Linux machine: processes, hardware, packages, files on disk.",
-        tools=["shell", "system_info", "list_dir", "read_file", "now", "calculate"],
-        guidance="- For CPU, RAM, disk or GPU status use system_info first: it is\n"
+        tools=["shell", "system_info", "list_dir", "read_file", "now", "calculate", "desktop"],
+        guidance="- To open or launch an app, open a URL, or play/pause/skip music, use\n"
+                 "  desktop (shell cannot reach the screen). Never say you did it\n"
+                 "  unless desktop returned success.\n"
+                 "- For CPU, RAM, disk or GPU status use system_info first: it is\n"
                  "  already parsed and reliable. Only fall back to shell if it is\n"
                  "  missing something you specifically need.\n"
                  "- Probe before concluding: `which x`, `ls`, `ps aux`, `df -h`.\n"

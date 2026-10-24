@@ -105,7 +105,7 @@ def prefix(config: Config, profile: str, *, network: bool = False,
                 # A shared network namespace also shares abstract sockets (X11)
                 # and every service on localhost.
                 *([] if (profile == "worker" or config.shell_network) else ["--unshare-net"]),
-                "--clearenv", "--setenv", "PATH", "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+                "--clearenv", "--setenv", "PATH", "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/snap/bin",  # snap apps live in /snap/bin
                 "--setenv", "HOME", home, "--setenv", "LANG", "C.UTF-8", "--setenv", "TERM", "dumb"]
     elif profile == "isolated":
         args = ["bwrap", "--ro-bind", "/usr", "/usr",

@@ -43,7 +43,7 @@ from janos.tools import Tool, Toolbox
 PLAYBOOKS = Path(__file__).resolve().parent / "playbooks"
 
 # A recipe may compose tools, but not obtain code execution or build more modules.
-FORBIDDEN_STEP_TOOLS = {"shell", "run_python", "create_tool", "create_playbook", "write_file"}
+FORBIDDEN_STEP_TOOLS = {"shell", "run_python", "create_tool", "create_playbook", "write_file", "desktop"}
 
 _PLACEHOLDER = re.compile(r"\{\{\s*([a-zA-Z_][\w]*)(?:\.(url|line))?\s*\}\}")
 MAX_STEPS = 6
