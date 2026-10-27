@@ -1084,9 +1084,13 @@ or the only available lesson is a truism.
 
     def _finish(self, turn: Turn, decision: Any) -> None:
         """Remember the episode and feed the learners (shared by every handle() path)."""
+        calls, answer = turn.tool_calls, turn.answer
+        if any(c.get("tool") == "screen" for c in calls):   # screen content is never stored
+            calls = [{**c, "output": "[screen content not stored]"} if c.get("tool") == "screen" else c for c in calls]
+            answer = "[screen content not stored]"
         turn.episode_id = self.memory.remember(
-            task=turn.task, answer=turn.answer, task_type=turn.task_type,
-            plan=turn.plan, agents=turn.agents_used, tool_calls=turn.tool_calls,
+            task=turn.task, answer=answer, task_type=turn.task_type,
+            plan=turn.plan, agents=turn.agents_used, tool_calls=calls,
             errors=turn.errors, score=turn.score, healed=turn.heal_attempts,
             duration_ms=turn.duration_ms,
             meta={"complexity": turn.complexity, "issues": turn.issues,

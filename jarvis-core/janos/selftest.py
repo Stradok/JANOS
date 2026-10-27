@@ -2117,6 +2117,8 @@ async def test_screen() -> None:
         t = await sup.handle("what's on my screen?")
         check("handle(): screen intent runs screen look through the tool path, answer is the model text",
               t.answer == "Editor open." and [c["tool"] for c in t.tool_calls] == ["screen"] and t.score > 0 and sup.toolbox.tainted, str((t.answer, t.tool_calls)))
+        stored = str(sup.memory.episode(t.episode_id))
+        check("screen text is not persisted to memory", "Editor open." not in stored and "[screen content not stored]" in stored, stored[:200])
         buf.clear()
         t = await sup.handle("look at my screen")
         check("handle(): no frame -> honest failure", "Screen sharing is off" in t.answer and t.score == 0, t.answer)
