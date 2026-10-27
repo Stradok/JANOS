@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# JANOS desktop launcher: start the server if needed, open the HUD in an app-mode window.
+set -euo pipefail
+
+case "${1:-}" in
+  --stop)
+    pkill -u "$(id -u)" -f "uvicorn janos.server:app" || true
+    exit 0 ;;
+  "") ;;
+  *) echo "usage: janos-app [--stop]" >&2; exit 2 ;;
+esac
+
+if [ -z "${JANOS_HOME:-}" ] && [ -f /etc/janos/janos.conf ]; then
+  # Parse the one key by hand; never source the config file.
+  JANOS_HOME=$(grep -E '^JANOS_HOME=' /etc/janos/janos.conf | tail -n 1 | cut -d= -f2- | tr -d "\"' \r") || true
+fi
+JANOS_HOME="${JANOS_HOME:-$HOME/Desktop/JANOS}"
+PORT="${JANOS_PORT:-8000}"
+DATA="$HOME/.local/share/janos-app"
+mkdir -p "$DATA"
+
+notify() { command -v notify-send >/dev/null 2>&1 && notify-send "JANOS" "$1" || true; }
+
+health() { curl -s -o /dev/null -w '%{http_code}' --max-time 2 "http://127.0.0.1:$PORT/health" || true; }
+is_up() { local c; c=$(health); [ "$c" = 200 ] || [ "$c" = 401 ]; }
+
+if ! is_up; then
+  if [ ! -x "$JANOS_HOME/jarvis-core/.venv/bin/uvicorn" ]; then
+    msg="JANOS not found at $JANOS_HOME (no jarvis-core/.venv). Set JANOS_HOME or /etc/janos/janos.conf."
+    echo "janos-app: $msg" >&2
+    notify "$msg"
+    exit 1
+  fi
+  # Detached so the server outlives this launcher; full mode is the desktop default.
+  cd "$JANOS_HOME/jarvis-core" && setsid nohup env JANOS_ACCESS="${JANOS_ACCESS:-full}" .venv/bin/uvicorn janos.server:app --host 127.0.0.1 --port "$PORT" >>"$DATA/server.log" 2>&1 &
+  SECONDS=0
+  until is_up; do
+    if [ "$SECONDS" -ge 60 ]; then
+      echo "janos-app: server did not come up within 60 s. Last log lines:" >&2
+      tail -n 5 "$DATA/server.log" >&2 || true
+      notify "JANOS server failed to start. See $DATA/server.log"
+      exit 1
+    fi
+    sleep 0.5
+  done
+fi
+
+# Memory dir follows the server's own override (JANOS_MEMORY_DIR), else jarvis-core/memory.
+MEM="${JANOS_MEMORY_DIR:-$JANOS_HOME/jarvis-core/memory}"
+# The login code is single-use and never printed or logged; only the URL is captured.
+if ! URL=$("$JANOS_HOME/jarvis-core/.venv/bin/python" "$JANOS_HOME/jarvis-core/janos/launch_ui.py" --print-url "$MEM" "$PORT" 2>/dev/null) || [ -z "$URL" ]; then
+  echo "janos-app: could not get a login code from the server (is api_token present in $MEM?)" >&2
+  notify "Could not get a JANOS login code."
+  exit 1
+fi
+
+find_browser() {
+  local c d f
+  for c in google-chrome-stable google-chrome chromium chromium-browser brave-browser microsoft-edge; do
+    if command -v "$c" >/dev/null 2>&1; then command -v "$c"; return 0; fi
+  done
+  # Playwright's Chromium: newest chromium-<rev> dir, either layout.
+  d=$(ls -1d "$HOME"/.cache/ms-playwright/chromium-*/ 2>/dev/null | sort -V | tail -n 1) || true
+  if [ -n "$d" ]; then
+    for f in "$d/chrome-linux64/chrome" "$d/chrome-linux/chrome"; do
+      if [ -x "$f" ]; then echo "$f"; return 0; fi
+    done
+  fi
+  return 1
+}
+
+BROWSER=$(find_browser) || BROWSER=""
+if [ -z "$BROWSER" ]; then
+  msg="No Chromium browser found. Install one for the app window: sudo snap install chromium"
+  echo "janos-app: $msg" >&2
+  notify "$msg"
+  exec xdg-open "$URL"
+fi
+
+# The dedicated profile and localhost-only window make auto-granting camera/mic acceptable;
+# the flag auto-accepts the permission prompt.
+exec "$BROWSER" --app="$URL" --user-data-dir="$DATA/profile" --class=JANOS --name=JANOS \
+  --window-size=1400,900 --ozone-platform-hint=auto --use-fake-ui-for-media-stream \
+  --no-first-run --no-default-browser-check --disable-features=Translate

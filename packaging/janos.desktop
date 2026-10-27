@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Name=JANOS
+GenericName=AI Assistant
+Comment=Local autonomous assistant
+Exec=janos-app
+Icon=janos
+Terminal=false
+Categories=Utility;Development;
+StartupWMClass=JANOS
+StartupNotify=true
+Actions=Quit;
+
+[Desktop Action Quit]
+Name=Quit JANOS (stop server)
+Exec=janos-app --stop

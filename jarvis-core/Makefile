@@ -33,7 +33,7 @@ endif
 
 .DEFAULT_GOAL := help
 .PHONY: help \
-        janos janos-setup janos-serve janos-ui janos-ui-build janos-test janos-ask \
+        janos janos-setup janos-serve janos-ui janos-ui-build janos-deb janos-app-install janos-test janos-ask \
         janos-employee janos-stats janos-lessons janos-reset janos-tools \
         janos-auto janos-auto-night janos-auto-stop \
         setup install install-dev install-optional \
@@ -87,6 +87,12 @@ janos-ui: _janos-check ## JANOS: open the HUD in your browser
 	     LAUNCH=; sleep 0.1; done; \
 	   test -n "$$LAUNCH" && xdg-open "$$LAUNCH" >/dev/null 2>&1 ) &
 	@$(JVENV)/bin/uvicorn janos.server:app --host $(JANOS_HOST) --port $(PORT)
+
+janos-deb: ## JANOS: build the desktop launcher .deb into dist/
+	@../packaging/build-deb.sh
+
+janos-app-install: ## JANOS: install the desktop launcher for this user (no root)
+	@../packaging/install-user.sh
 
 janos-test: _janos-check ## JANOS: self-test — add OFFLINE=1 to skip model/network
 	@$(JPY) -m janos.selftest $(if $(OFFLINE),--offline,)

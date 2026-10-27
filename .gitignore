@@ -44,3 +44,6 @@ jarvis-core/memory/autorun.pid
 # HUD build output and deps
 jarvis-core/janos/ui_dist/
 UI/janos-hud/node_modules/
+
+# Packaged desktop builds (packaging/build-deb.sh)
+/dist/
