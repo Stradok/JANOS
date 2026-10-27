@@ -21,6 +21,7 @@ from pathlib import Path
 
 from janos import sandbox
 from janos.config import Config
+from janos.tools import _scrub_env
 
 SNAP_BIN = Path("/snap/opencode/current/bin/opencode")  # the /snap/bin launcher refuses to run in bwrap
 
@@ -176,9 +177,12 @@ class Employee:
         if self._is_claude(binary):
             # Unsandboxed (access=full only, checked in run()); the worktree is the cwd.
             # ponytail: no bwrap for claude; it needs a writable ~/.claude, add a worker profile if wanted.
+            # --setting-sources user and --strict-mcp-config keep repo-level hooks and .mcp.json out.
             return await _exec([binary, "-p", prompt, "--permission-mode", "plan" if plan else "acceptEdits",
                                 "--max-budget-usd", str(self.config.employee_budget_usd),
-                                "--output-format", "text"], timeout, cwd=path)
+                                "--output-format", "text",
+                                "--setting-sources", "user", "--strict-mcp-config"], timeout, cwd=path,
+                               env=_scrub_env(dict(os.environ)))
         home = Path.home()
         # Private state: the agent never writes the user's own OpenCode sessions,
         # caches or credentials, so nothing it does persists into the user's tools.

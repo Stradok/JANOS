@@ -1206,20 +1206,33 @@ async def test_full_access() -> None:
     grepo = _git_repo({"README": "x\n"})
     emp = E.Employee(ccfg, grepo)
     seen: list = []
+    envs: list = []
     async def fake_exec(argv, timeout, cwd=None, env=None):
         seen.append((argv, cwd))
+        envs.append(env)
         return 0, "ok"
     real = E._exec
     E._exec = fake_exec
+    keep_secret = os.environ.get("JANOS_SELFTEST_CLAUDE_KEY")
+    os.environ["JANOS_SELFTEST_CLAUDE_KEY"] = "leak-me"
     try:
         wt = Path(tempfile.mkdtemp())
         await emp._agent("/x/claude", wt, "do x", "", 5)
         await emp._agent("/x/claude", wt, "review", "", 5, plan=True)
     finally:
         E._exec = real
+        if keep_secret is None:
+            os.environ.pop("JANOS_SELFTEST_CLAUDE_KEY", None)
+        else:
+            os.environ["JANOS_SELFTEST_CLAUDE_KEY"] = keep_secret
     check("claude argv exact, cwd is the worktree",
           seen[0] == (["/x/claude", "-p", "do x", "--permission-mode", "acceptEdits", "--max-budget-usd", "1.0",
-                       "--output-format", "text"], wt) and seen[1][0][4] == "plan", str(seen))
+                       "--output-format", "text", "--setting-sources", "user", "--strict-mcp-config"], wt)
+          and seen[1][0][4] == "plan", str(seen))
+    check("claude env is scrubbed of *_KEY/*_TOKEN/*_SECRET",
+          envs[0] is not None and "JANOS_SELFTEST_CLAUDE_KEY" not in envs[0]
+          and not any(re.search(r"(KEY|TOKEN|SECRET)$", k, re.I) for k in envs[0]),
+          str([k for k in (envs[0] or {}) if re.search(r"(KEY|TOKEN|SECRET)$", k, re.I)]))
     safe = dataclasses.replace(ccfg, access="safe")
     rr = await E.Employee(safe, grepo).run("t")
     check("claude backend refuses unless access=full", "access: full" in rr.error or "not found" in rr.error, rr.error)
