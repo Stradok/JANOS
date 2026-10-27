@@ -1258,6 +1258,155 @@ async def test_full_access() -> None:
         sup.close()
 
 
+async def test_computer() -> None:
+    section("computer (blind ydotool keyboard/mouse) and desktop list_apps (backend mocked; no real input)")
+    import dataclasses
+    from janos import supervisor as S, tools as T
+    full = dataclasses.replace(Config.load(), access="full", desktop=True)
+    tb, tsafe = Toolbox(full), Toolbox(dataclasses.replace(Config.load(), access="safe", desktop=True))
+    sent: list = []
+    log: list = []   # ordered ('y', argv) / ('s', secs) / ('daemon',)
+    state = {"sock": True, "starts": 0, "rc": 0}
+    orig = (T._ydotool, T._sleep, T._socket_exists, T._start_ydotoold, T._clock, T._APP_DIRS, T._spawn)
+    def fake_y(args):
+        log.append(("y", args))
+        return state["rc"], "" if state["rc"] == 0 else "boom"
+    def start():
+        state["starts"] += 1
+        log.append(("daemon",))
+    T._ydotool, T._start_ydotoold = fake_y, start
+    T._sleep = lambda s: log.append(("s", s))
+    T._socket_exists = lambda: state["sock"]
+    clock = [9000.0]
+    T._clock = lambda: clock[0]
+    T._spawn = lambda argv, env_extra=None: sent.append(argv) or ""
+    ys = lambda: [e[1] for e in log if e[0] == "y"]
+    def reset():
+        log.clear(); sent.clear(); T._computer_calls.clear(); T._desktop_calls.clear()
+        state.update(sock=True, starts=0, rc=0)
+    run = lambda tool=tb, **a: tool.run("computer", a)
+    try:
+        # pydantic validation
+        reset()
+        good = [dict(action="key", keys="ctrl+shift+t"), dict(action="type", text="hello -x"), dict(action="click", button="right", x=5, y=6),
+                dict(action="move", x=8000, y=0), dict(action="move_by", x=-3000, y=3000), dict(action="scroll", amount=-20),
+                dict(action="wait", seconds=5), dict(action="app_search", query="Visual Studio-Code_1.2")]
+        rs = [await run(**g) for g in good]
+        check("computer: every action accepted with valid args", all(r.ok and r.output.endswith("(blind: the screen was not checked)") for r in rs),
+              str([r.output for r in rs if not r.ok]))
+        reset()
+        badc = [dict(action="key", keys="blorp"), dict(action="key", keys=""), dict(action="key", keys="ctrl+é"), dict(action="type", text="a\nb"),
+                dict(action="type", text="héllo"), dict(action="type", text=""), dict(action="type", text="x" * 201),
+                dict(action="click", button="back"), dict(action="click", x=5), dict(action="move", x=8001, y=1), dict(action="move", x=-1, y=1),
+                dict(action="move_by", x=3001, y=0), dict(action="scroll", amount=21), dict(action="scroll", amount=0),
+                dict(action="wait", seconds=5.1), dict(action="app_search", query=""), dict(action="app_search", query="a; rm -rf /"),
+                dict(action="app_search", query="$(x)"), dict(action="app_search", query="x" * 61), dict(action="nope")]
+        rb = [await run(**b) for b in badc]
+        check("computer: bad keys/text/coords/button/query rejected with a short message, nothing sent",
+              all(not r.ok and "Traceback" not in r.output and len(r.output) < 200 for r in rb) and not log,
+              str([(b, r.output) for b, r in zip(badc, rb) if r.ok or len(r.output) >= 200]))
+        # exact argv
+        reset()
+        await run(action="key", keys="ctrl+l"); await run(action="key", keys="Super"); await run(action="key", keys="alt+tab")
+        check("key: ctrl+l presses 29,38 and releases in reverse; super is 125:1 125:0",
+              ys()[0] == ["key", "29:1", "38:1", "38:0", "29:0"] and ys()[1] == ["key", "125:1", "125:0"]
+              and ys()[2] == ["key", "56:1", "15:1", "15:0", "56:0"], str(ys()))
+        reset()
+        await run(action="key", keys="ctrl+shift+t"); await run(action="key", keys="f12")
+        check("key: three-key combo releases in reverse; f12 is 88", ys()[0] == ["key", "29:1", "42:1", "20:1", "20:0", "42:0", "29:0"]
+              and ys()[1] == ["key", "88:1", "88:0"], str(ys()))
+        reset()
+        await run(action="type", text="--rm \\n x")
+        check("type: argv has -- before the exact text and escapes disabled", ys() == [["type", "--key-delay", "12", "-e", "0", "--", "--rm \\n x"]], str(ys()))
+        reset()
+        for b in ("left", "right", "middle"):
+            await run(action="click", button=b, x=100, y=200)
+        await run(action="click")
+        check("click: absolute move then 0xC0/0xC1/0xC2; no move without x,y",
+              ys() == [["mousemove", "--absolute", "-x", "100", "-y", "200"], ["click", "0xC0"],
+                       ["mousemove", "--absolute", "-x", "100", "-y", "200"], ["click", "0xC1"],
+                       ["mousemove", "--absolute", "-x", "100", "-y", "200"], ["click", "0xC2"], ["click", "0xC0"]], str(ys()))
+        reset()
+        await run(action="scroll", amount=3); await run(action="scroll", amount=-2); await run(action="move_by", x=-4, y=5)
+        check("scroll: positive = down = negative wheel y; move_by is relative",
+              ys() == [["mousemove", "--wheel", "-x", "0", "-y", "-3"], ["mousemove", "--wheel", "-x", "0", "-y", "2"],
+                       ["mousemove", "-x", "-4", "-y", "5"]], str(ys()))
+        # blocked combos
+        reset()
+        blocked = ["ctrl+alt+delete", "Ctrl+Alt+F3", "alt+ctrl+f12", "super+l", "L+SUPER", "win+l", "alt+sysrq", "sysrq", "ctrl+alt+backspace"]
+        rk = [await run(action="key", keys=k) for k in blocked]
+        check("blocked key combos are refused and never sent", all(not r.ok and "Refused" in r.output for r in rk) and not log,
+              str([(k, r.output) for k, r in zip(blocked, rk) if r.ok]))
+        # app_search ordering
+        reset()
+        r = await run(action="app_search", query="firefox")
+        check("app_search: super, wait, type, wait, enter in order",
+              log == [("y", ["key", "125:1", "125:0"]), ("s", 0.7), ("y", ["type", "--key-delay", "12", "-e", "0", "--", "firefox"]),
+                      ("s", 0.8), ("y", ["key", "28:1", "28:0"])] and "unverified" in r.output, str(log))
+        # access gate
+        reset()
+        rs_ = await run(tsafe, action="key", keys="enter")
+        check("computer refuses unless access=full", not rs_.ok and "access: full" in rs_.output and not log, rs_.output)
+        # rate limit
+        reset()
+        first = [(await run(action="wait", seconds=0)).ok for _ in range(60)]
+        r61 = await run(action="wait", seconds=0)
+        clock[0] += 61
+        r62 = await run(action="wait", seconds=0)
+        check("rate limit: 60 per minute, 61st refused, allowed again after the window", all(first) and not r61.ok and "60" in r61.output and r62.ok, r61.output)
+        # daemon handling
+        reset()
+        await run(action="key", keys="enter")
+        check("daemon not started when the socket exists", state["starts"] == 0)
+        reset(); state["sock"] = False
+        r = await run(action="key", keys="enter")
+        check("socket absent and daemon cannot start: explanatory failure, nothing sent, no raise",
+              not r.ok and "ydotoold is not running" in r.output and "input" in r.output and state["starts"] == 1 and not ys(), r.output)
+        reset(); state["sock"] = False
+        T._start_ydotoold = lambda: (state.__setitem__("starts", state["starts"] + 1), state.__setitem__("sock", True))
+        r = await run(action="key", keys="enter")
+        check("socket absent: daemon start attempted once, then the action runs", r.ok and state["starts"] == 1 and len(ys()) == 1, r.output)
+        T._start_ydotoold = start
+        reset(); state["rc"] = 1
+        r = await run(action="key", keys="enter")
+        check("ydotool failure is a failed result, not a traceback", not r.ok and "boom" in r.output and "Traceback" not in r.output, r.output)
+
+        # list_apps
+        reset()
+        with tempfile.TemporaryDirectory() as td:
+            apps = Path(td)
+            for i in range(70):
+                (apps / f"app{i:02d}.desktop").write_text(f"[Desktop Entry]\nType=Application\nName=Zed Thing {i}\nExec=x\n")
+            (apps / "firefox.desktop").write_text("[Desktop Entry]\nType=Application\nName=Firefox Web Browser\nExec=x\n")
+            T._APP_DIRS = [apps]
+            allr = await tsafe.run("desktop", {"action": "list_apps"})
+            fr = await tsafe.run("desktop", {"action": "list_apps", "name": "FIRE"})
+            none = await tsafe.run("desktop", {"action": "list_apps", "name": "zzzz"})
+            check("list_apps: caps at 60 lines, filters case-insensitively, reports no match",
+                  allr.ok and allr.output.count(" (") == 60 and "more" in allr.output
+                  and fr.output == "firefox (Firefox Web Browser)" and "No installed app" in none.output, allr.output[-80:] + fr.output)
+
+            # open_app -> app_search fallback
+            async def intent(cfg):
+                reset()
+                sup = Supervisor(cfg)
+                try:
+                    t = S.Turn(task="t")
+                    await sup._run_desktop_intent(t, [{"action": "open_app", "name": "nonexistentapp"}])
+                    return t
+                finally:
+                    sup.close()
+            t = await intent(full)
+            check("open_app miss in full mode falls back to computer app_search, honestly",
+                  [c["tool"] for c in t.tool_calls] == ["desktop", "computer"] and "nonexistentapp" in "".join(map(str, ys()))
+                  and "could not see the screen" in t.answer and t.score > 0, str((t.tool_calls, t.answer)))
+            t = await intent(dataclasses.replace(Config.load(), access="safe", desktop=True))
+            check("non-full mode does NOT fall back", [c["tool"] for c in t.tool_calls] == ["desktop"] and not log and "could not finish" in t.answer, t.answer)
+    finally:
+        T._ydotool, T._sleep, T._socket_exists, T._start_ydotoold, T._clock, T._APP_DIRS, T._spawn = orig
+        T._computer_calls.clear(); T._desktop_calls.clear()
+
+
 async def test_desktop_intents() -> None:
     section("Deterministic desktop intents and full-mode write scope (everything mocked)")
     from janos import supervisor as S, tools as T
@@ -1451,6 +1600,7 @@ async def main_async() -> int:
     await test_sandbox()
     await test_desktop()
     await test_desktop_intents()
+    await test_computer()
     await test_playbooks()
     await test_voice()
     test_policy()

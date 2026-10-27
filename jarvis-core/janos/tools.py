@@ -33,10 +33,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Annotated, Any, Awaitable, Callable, Literal, Union
 from urllib.parse import parse_qs, parse_qsl, quote_plus, urlparse
 
 import httpx
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError, field_validator, model_validator
 
 from janos import sandbox
 from janos.config import Config
@@ -286,7 +287,7 @@ def _scrub_env(env: dict[str, str]) -> dict[str, str]:
 _desktop_calls: deque[float] = deque()
 _clock = time.monotonic   # tests replace this
 _ENV_KEEP = ("HOME", "PATH", "DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY",
-             "DBUS_SESSION_BUS_ADDRESS", "LANG")
+             "DBUS_SESSION_BUS_ADDRESS", "LANG", "YDOTOOL_SOCKET")
 
 
 def _gui_env() -> dict[str, str]:
@@ -441,6 +442,222 @@ def _media(command: str) -> str:
             by = " - " + ", ".join(a[0] or a[1] for a in re.findall(r"'([^']*)'|\"([^\"]*)\"", artist.group(1))) if artist else ""
             line += f"; track: {title.group(2)}{by}"
     return line
+
+
+# ------------------------------------------------------------------ computer
+# BLIND keyboard/mouse via ydotool (Wayland has no xdotool/pyautogui). There is no vision
+# model: nothing here can see the screen, so every result says what was SENT, not what happened.
+# Verified against the installed ydotool help: `key <code>:1 <code>:0`; `type -d/--key-delay`,
+# `-e 0` (escapes are ON by default for argv text); `click 0xC0` = left down+up, 0x01 right,
+# 0x02 middle (0x40 down, 0x80 up); `mousemove -a -x X -y Y`; `mousemove -w -x 0 -y N` for the wheel.
+# Absolute coordinates are whatever the installed ydotool/compositor maps them to (its help only
+# warns that mouse acceleration breaks them): treat them as best effort and unverified.
+
+_KEYS: dict[str, int] = {
+    "esc": 1, "tab": 15, "enter": 28, "space": 57, "backspace": 14, "delete": 111,
+    "ctrl": 29, "shift": 42, "alt": 56, "super": 125,
+    "up": 103, "down": 108, "left": 105, "right": 106, "home": 102, "end": 107,
+    "pageup": 104, "pagedown": 109,
+    **{f"f{i}": c for i, c in zip(range(1, 13), [*range(59, 69), 87, 88])},
+    **{ch: c for ch, c in zip("1234567890", range(2, 12))},
+    **{ch: c for row, base in (("qwertyuiop", [16, 17, 18, 19, 20, 21, 22, 23, 24, 25]),
+                               ("asdfghjkl", [30, 31, 32, 33, 34, 35, 36, 37, 38]),
+                               ("zxcvbnm", [44, 45, 46, 47, 48, 49, 50])) for ch, c in zip(row, base)},
+}
+_KEY_ALIAS = {"escape": "esc", "return": "enter", "meta": "super", "win": "super", "control": "ctrl",
+              "del": "delete", "pgup": "pageup", "pgdn": "pagedown"}
+_QUERY_RE = re.compile(r"[A-Za-z0-9 ._-]+")
+_CMP_RATE_MAX = 60
+_computer_calls: deque[float] = deque()
+_sleep = time.sleep   # tests replace this
+
+
+def _key_names(keys: str) -> list[str]:
+    if not keys.isascii():
+        raise ValueError("keys must be ASCII")
+    names = [_KEY_ALIAS.get(p.strip().lower(), p.strip().lower()) for p in keys.split("+")]
+    if not 1 <= len(names) <= 5 or any(not n for n in names):
+        raise ValueError("keys must look like ctrl+l (1 to 5 keys joined by +)")
+    s = set(names)
+    if s & {"sysrq"} or {"ctrl", "alt"} <= s and (s & {"delete", "backspace"} or any(f"f{i}" in s for i in range(1, 13))) \
+            or {"super", "l"} <= s:
+        raise ValueError("Refused: that key combination (lock, VT switch, reboot, SysRq) is blocked")
+    bad = [n for n in names if n not in _KEYS]
+    if bad:
+        raise ValueError(f"unknown key name {bad[0]!r}")
+    return names
+
+
+class _Key(BaseModel):
+    action: Literal["key"]
+    keys: str
+    @field_validator("keys")
+    @classmethod
+    def _v(cls, v: str) -> str:
+        return "+".join(_key_names(v))
+
+
+class _Type(BaseModel):
+    action: Literal["type"]
+    text: str = Field(min_length=1, max_length=200)
+    @field_validator("text")
+    @classmethod
+    def _v(cls, v: str) -> str:
+        if not (v.isascii() and v.isprintable()):
+            raise ValueError("text must be printable ASCII with no newline or control characters (use key enter)")
+        return v
+
+
+class _Click(BaseModel):
+    action: Literal["click"]
+    button: Literal["left", "right", "middle"] = "left"
+    x: int = Field(0, ge=0, le=8000)
+    y: int = Field(0, ge=0, le=8000)
+    @model_validator(mode="after")
+    def _v(self) -> "_Click":
+        if (self.x > 0) != (self.y > 0):
+            raise ValueError("give both x and y (each > 0) to move first, or neither")
+        return self
+
+
+class _Move(BaseModel):
+    action: Literal["move"]
+    x: int = Field(ge=0, le=8000)
+    y: int = Field(ge=0, le=8000)
+
+
+class _MoveBy(BaseModel):
+    action: Literal["move_by"]
+    x: int = Field(ge=-3000, le=3000)
+    y: int = Field(ge=-3000, le=3000)
+
+
+class _Scroll(BaseModel):
+    action: Literal["scroll"]
+    amount: int = Field(ge=-20, le=20)
+    @field_validator("amount")
+    @classmethod
+    def _v(cls, v: int) -> int:
+        if v == 0:
+            raise ValueError("amount must be non-zero (positive = down, negative = up)")
+        return v
+
+
+class _Wait(BaseModel):
+    action: Literal["wait"]
+    seconds: float = Field(ge=0, le=5)
+
+
+class _AppSearch(BaseModel):
+    action: Literal["app_search"]
+    query: str = Field(min_length=1, max_length=60)
+    @field_validator("query")
+    @classmethod
+    def _v(cls, v: str) -> str:
+        v = v.strip()
+        if not v or not _QUERY_RE.fullmatch(v):
+            raise ValueError("query may only use letters, digits, space and . - _")
+        return v
+
+
+_COMPUTER_ACTIONS = TypeAdapter(Annotated[
+    Union[_Key, _Type, _Click, _Move, _MoveBy, _Scroll, _Wait, _AppSearch], Field(discriminator="action")])
+_CMP_FIELDS = {"key": ("keys",), "type": ("text",), "click": ("button", "x", "y"), "move": ("x", "y"),
+               "move_by": ("x", "y"), "scroll": ("amount",), "wait": ("seconds",), "app_search": ("query",)}
+
+
+def _ydotool(args: list[str]) -> tuple[int, str]:
+    """Run ydotool (argv list, no shell). Tests replace this; nothing else touches the input device."""
+    try:
+        p = subprocess.run(["ydotool", *args], capture_output=True, text=True, timeout=10,
+                           stdin=subprocess.DEVNULL, env=_gui_env())
+    except (OSError, subprocess.SubprocessError) as e:
+        return 1, str(e)
+    return p.returncode, (p.stdout if p.returncode == 0 else p.stderr or p.stdout).strip()
+
+
+def _socket_exists() -> bool:
+    """ydotool's socket: $YDOTOOL_SOCKET, else $XDG_RUNTIME_DIR/.ydotool_socket, else /tmp/.ydotool_socket."""
+    cands = [os.environ.get("YDOTOOL_SOCKET"), os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/nonexistent"), ".ydotool_socket"),
+             "/tmp/.ydotool_socket"]
+    return any(c and Path(c).exists() for c in cands)
+
+
+def _start_ydotoold() -> None:
+    """Start the daemon detached (it needs /dev/uinput: group input)."""
+    try:
+        subprocess.Popen(["ydotoold"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True, env=_gui_env())
+    except OSError:
+        pass
+
+
+def _ensure_ydotoold() -> str:
+    """'' when the daemon socket exists (starting the daemon if it did not), else an explanation."""
+    if _socket_exists():
+        return ""
+    _start_ydotoold()
+    for _ in range(20):
+        _sleep(0.1)
+        if _socket_exists():
+            return ""
+    return "ydotoold is not running and could not be started (check /dev/uinput permissions / group `input`)."
+
+
+def _computer_steps(a: Any) -> tuple[list[tuple[str, Any]], str]:
+    """(steps, description) for a validated action. A step is ('y', ydotool argv) or ('s', seconds)."""
+    if isinstance(a, _Key):
+        return [("y", _key_argv(a.keys.split("+")))], f"pressed {a.keys}"
+    if isinstance(a, _Type):
+        return [("y", ["type", "--key-delay", "12", "-e", "0", "--", a.text])], f"typed {len(a.text)} characters"
+    if isinstance(a, _Click):
+        code = {"left": "0xC0", "right": "0xC1", "middle": "0xC2"}[a.button]
+        pre = [("y", ["mousemove", "--absolute", "-x", str(a.x), "-y", str(a.y)])] if a.x > 0 else []
+        return pre + [("y", ["click", code])], f"{a.button}-clicked" + (f" at ({a.x},{a.y})" if a.x > 0 else " at the current pointer")
+    if isinstance(a, _Move):
+        return [("y", ["mousemove", "--absolute", "-x", str(a.x), "-y", str(a.y)])], f"moved the pointer to ({a.x},{a.y})"
+    if isinstance(a, _MoveBy):
+        return [("y", ["mousemove", "-x", str(a.x), "-y", str(a.y)])], f"moved the pointer by ({a.x},{a.y})"
+    if isinstance(a, _Scroll):
+        return [("y", ["mousemove", "--wheel", "-x", "0", "-y", str(-a.amount)])], \
+            f"scrolled {'down' if a.amount > 0 else 'up'} {abs(a.amount)}"
+    if isinstance(a, _Wait):
+        return [("s", a.seconds)], f"waited {a.seconds:g}s"
+    # ponytail: fixed 0.7s/0.8s waits; the overview animation time is not observable, so this can miss on a slow machine
+    return [("y", _key_argv(["super"])), ("s", 0.7), ("y", ["type", "--key-delay", "12", "-e", "0", "--", a.query]),
+            ("s", 0.8), ("y", _key_argv(["enter"]))], \
+        f"opened the GNOME overview, typed {a.query!r} and pressed enter (launches the first search hit; the result is unverified)"
+
+
+def _key_argv(names: list[str]) -> list[str]:
+    codes = [_KEYS[n] for n in names]
+    return ["key", *[f"{c}:1" for c in codes], *[f"{c}:0" for c in reversed(codes)]]
+
+
+def _computer_run(a: Any) -> str:
+    err = _ensure_ydotoold()
+    if err:
+        raise DesktopError(err)
+    steps, done = _computer_steps(a)
+    for kind, arg in steps:
+        if kind == "s":
+            _sleep(arg)
+            continue
+        rc, out = _ydotool(arg)
+        if rc != 0:
+            raise DesktopError(f"ydotool {arg[0]} failed: {out[:160]} (blind: the screen was not checked)")
+    return f"Sent: {done} (blind: the screen was not checked)"
+
+
+def _computer_rate_ok() -> bool:
+    now = _clock()
+    while _computer_calls and now - _computer_calls[0] > _RATE_WINDOW:
+        _computer_calls.popleft()
+    if len(_computer_calls) >= _CMP_RATE_MAX:
+        return False
+    _computer_calls.append(now)
+    return True
+
 
 
 class Toolbox:
@@ -961,9 +1178,15 @@ class Toolbox:
             if not cfg.desktop:
                 raise DesktopError("Desktop control is disabled in config (desktop: false).")
             action = action.strip().lower()
-            if action not in ("open_app", "open_url", "media"):
-                raise DesktopError("action must be open_app, open_url or media.")
+            if action not in ("open_app", "open_url", "media", "list_apps"):
+                raise DesktopError("action must be open_app, open_url, media or list_apps.")
             full = cfg.full_access
+            if action == "list_apps":   # read-only: does not use a rate-limit slot
+                q = name.strip().lower()
+                rows = [f"{i} ({n})" for i, (n, _) in sorted(_desktop_entries(full).items())
+                        if not q or q in i.lower() or q in n.lower()]
+                return "\n".join(rows[:60]) + (f"\n... {len(rows) - 60} more; narrow with name=" if len(rows) > 60 else "") \
+                    if rows else f"No installed app matches {name!r}."
             limit = _RATE_MAX_FULL if full else _RATE_MAX
             if not _desktop_rate_ok(limit):
                 raise DesktopError(f"Refused: more than {limit} desktop actions in a minute. Wait and stop repeating.")
@@ -1006,6 +1229,23 @@ class Toolbox:
                 raise DesktopError(err)
             return done
 
+        async def computer(action: str = "", keys: str = "", text: str = "", x: int = 0, y: int = 0,
+                           button: str = "left", amount: int = 0, query: str = "", seconds: float = 0) -> str:
+            if not (cfg.full_access and cfg.desktop):
+                raise DesktopError("Refused: computer (keyboard/mouse) needs access: full and desktop enabled in config.")
+            act = action.strip().lower()
+            if act not in _CMP_FIELDS:
+                raise DesktopError(f"action must be one of: {', '.join(_CMP_FIELDS)}.")
+            vals = dict(keys=keys, text=text, x=x, y=y, button=button, amount=amount, query=query, seconds=seconds)
+            try:
+                a = _COMPUTER_ACTIONS.validate_python({"action": act, **{k: vals[k] for k in _CMP_FIELDS[act]}})
+            except ValidationError as e:
+                er = e.errors()[0]
+                raise DesktopError(f"Invalid {act}: {'.'.join(map(str, er['loc']))}: {er['msg'].removeprefix('Value error, ')}") from None
+            if not _computer_rate_ok():
+                raise DesktopError(f"Refused: more than {_CMP_RATE_MAX} computer actions in a minute. Wait and stop repeating.")
+            return await asyncio.to_thread(_computer_run, a)
+
         spec: list[tuple] = [
             ("web_search", "Search the web for current information.",
              {"query": "str", "max_results": "int=5"}, web_search, False),
@@ -1029,9 +1269,13 @@ class Toolbox:
              {"fmt": "str (optional strftime)"}, now, False),
             ("system_info", "Report CPU, RAM, disk and GPU status.",
              {"what": "str: all|cpu|memory|disk|gpu"}, system_info, False),
-            ("desktop", "Control the user's desktop (outside the sandbox): action=open_app name=<app name> launches an installed app; action=open_url url=<spotify URI or http(s) URL on an allowed site>; action=media command=play|pause|play_pause|next|previous|status controls the running music player.",
-             {"action": "str: open_app|open_url|media", "name": "str (open_app)", "url": "str (open_url)",
+            ("desktop", "Control the user's desktop (outside the sandbox): action=open_app name=<app name> launches an installed app; action=open_url url=<spotify URI or http(s) URL on an allowed site>; action=media command=play|pause|play_pause|next|previous|status controls the running music player; action=list_apps name=<optional filter> lists installed apps as id (Name).",
+             {"action": "str: open_app|open_url|media|list_apps", "name": "str (open_app, list_apps filter)", "url": "str (open_url)",
               "command": "str (media)"}, desktop, True),
+            ("computer", "BLIND keyboard and mouse (access=full only; Wayland via ydotool). It cannot see the screen and cannot confirm anything happened: report only what was sent. One action per call. Prefer the desktop tool; use this only for UI steps desktop cannot do. action=key keys=<ctrl+l|super|enter|alt+tab|f5>; action=type text=<printable ASCII, max 200; use key enter for newline>; action=click button=left|right|middle [x,y to move first]; action=move x,y (absolute); action=move_by x,y (relative); action=scroll amount=<-20..20, positive=down>; action=wait seconds=0..5; action=app_search query=<app name> (opens GNOME search, types it, presses enter: launches the first hit unverified). Never type passwords or secrets.",
+             {"action": "str: key|type|click|move|move_by|scroll|wait|app_search", "keys": "str (key)", "text": "str (type)",
+              "x": "int (click|move|move_by)", "y": "int (click|move|move_by)", "button": "str (click)=left",
+              "amount": "int (scroll)", "query": "str (app_search)", "seconds": "float (wait)"}, computer, True),
             ("recall_memory", "Search past conversations and results.",
              {"query": "str", "limit": "int=4"}, recall_memory, False),
             ("save_note", "Persist a note for later recall.",

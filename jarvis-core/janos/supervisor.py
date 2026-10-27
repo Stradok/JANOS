@@ -547,6 +547,8 @@ Request: {task}
             r"|\b(next|previous) (song|track)\b|\bplay\b[^.!?]{0,40}\bon (spotify|youtube)\b", low
         ):
             needed.add("desktop")
+        if getattr(getattr(self, "config", None), "full_access", False) and re.search(r"\b(press|hit)\b[^.!?]{0,20}\b(keys?|enter|ctrl|alt|super|escape|esc|f\d{1,2})\b", low):
+            needed.add("computer")
         # An explicit request to build a tool must reach create_tool. Left alone
         # the agent writes Python that *describes* a tool and calls it done.
         if "create_tool" in low or re.search(
@@ -590,6 +592,8 @@ Request: {task}
                    "To open a site: desktop(action=open_url, url=...). For a specific song, open_url "
                    "spotify:search:<query>. Report only what it returned; say playing only if "
                    "desktop(action=media, command=status) confirms.",
+        "computer": "Call the computer tool (blind keyboard/mouse; one action per call; it cannot see the screen, so "
+                    "report only what was sent). To start an app desktop cannot find: computer(action=app_search, query=<name>).",
         "create_tool": "Call the create_tool tool to build the tool this request asks for, "
                        "then call the tool it returns to prove it works.",
     }
@@ -1042,11 +1046,11 @@ or the only available lesson is a truism.
             self.policy.learn(decision, reward(turn.score, turn.duration_ms / 1000),
                               key=turn.episode_id)
 
-    async def _desk(self, turn: Turn, args: dict[str, str]):
+    async def _desk(self, turn: Turn, args: dict[str, Any], tool: str = "desktop"):
         """One desktop call through the real tool path, logged and announced like an agent's."""
-        r = await self.toolbox.run("desktop", args)
+        r = await self.toolbox.run(tool, args)
         turn.tool_calls.append(r.as_dict())
-        self._emit({"type": "tool", "agent": "operator", "turn": len(turn.tool_calls), "tool": "desktop",
+        self._emit({"type": "tool", "agent": "operator", "turn": len(turn.tool_calls), "tool": tool,
                     "args": args, "ok": r.ok, "output": r.output[:400]})
         return r
 
@@ -1084,6 +1088,13 @@ or the only available lesson is a truism.
         for i, c in enumerate(calls):
             launched = i > 0 and calls[i - 1]["action"] == "open_app"
             r = await (play_after_launch() if c["action"] == "media" and launched else self._desk(turn, c))
+            if not r.ok and full and c["action"] == "open_app" and "No installed app matches" in r.output:
+                # blind fallback: GNOME Activities search; it cannot be verified
+                r = await self._desk(turn, {"action": "app_search", "query": c["name"]}, "computer")
+                if r.ok:
+                    say.append(f"No installed app matched {c['name']!r}, so I typed it into the GNOME search and pressed "
+                               "enter. I could not see the screen, so I cannot confirm anything opened.")
+                    continue
             if not r.ok:
                 failed = r.output
                 turn.errors.append(f"desktop: {r.output[:160]}")

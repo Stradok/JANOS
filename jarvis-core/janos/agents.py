@@ -118,7 +118,7 @@ DEFAULT_AGENTS: list[Agent] = [
         name="operator",
         role="system operator",
         purpose="Inspect and operate this Linux machine: processes, hardware, packages, files on disk.",
-        tools=["shell", "system_info", "list_dir", "read_file", "now", "calculate", "desktop"],
+        tools=["shell", "system_info", "list_dir", "read_file", "now", "calculate", "desktop", "computer"],
         guidance="- To open or launch an app, open a URL, or play/pause/skip music, use\n"
                  "  desktop (shell cannot reach the screen). Never say you did it\n"
                  "  unless desktop returned success.\n"
@@ -127,6 +127,13 @@ DEFAULT_AGENTS: list[Agent] = [
                  "  url=...). A specific song needs Spotify's API: open_url\n"
                  "  spotify:search:<query> and say honestly that you opened the search;\n"
                  "  claim playing only if desktop(action=media, command=status) says so.\n"
+                 "- Find apps: desktop(action=list_apps, name=<filter>). If open_app finds no\n"
+                 "  match (access=full), computer(action=app_search, query=<name>) uses the\n"
+                 "  GNOME search; say honestly it could not be verified.\n"
+                 "- computer is a BLIND keyboard/mouse (access=full). Prefer desktop; use computer\n"
+                 "  only for UI steps desktop cannot do. One action per call. Report only what\n"
+                 "  was sent, never that the UI changed. Never type passwords or secrets, and\n"
+                 "  never use it to get around a refusal from another tool.\n"
                  "- For CPU, RAM, disk or GPU status use system_info first: it is\n"
                  "  already parsed and reliable. Only fall back to shell if it is\n"
                  "  missing something you specifically need.\n"
