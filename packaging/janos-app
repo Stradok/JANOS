@@ -24,6 +24,26 @@ notify() { command -v notify-send >/dev/null 2>&1 && notify-send "JANOS" "$1" ||
 health() { curl -s -o /dev/null -w '%{http_code}' --max-time 2 "http://127.0.0.1:$PORT/health" || true; }
 is_up() { local c; c=$(health); [ "$c" = 200 ] || [ "$c" = 401 ]; }
 
+# True only if the 127.0.0.1:$PORT listener belongs to this user (ss shows pid= only for own processes).
+own_listener() {
+  local out line
+  if command -v ss >/dev/null 2>&1; then
+    out=$(ss -Htlnp "sport = :$PORT" 2>/dev/null) || return 1
+    while IFS= read -r line; do
+      case "$line" in *"127.0.0.1:$PORT "*pid=*) return 0 ;; esac
+    done <<<"$out"
+    return 1
+  elif command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -a -u "$(id -un)" >/dev/null 2>&1
+  else
+    echo "janos-app: neither ss nor lsof is installed; cannot verify the port owner." >&2
+    return 1
+  fi
+}
+
+# Delete the 0600 launcher page shortly after the browser has loaded it (the code is spent on load).
+cleanup_later() { setsid -f sh -c 'sleep 60; rm -f -- "$1"' _ "$1" >/dev/null 2>&1 </dev/null; }
+
 if ! is_up; then
   if [ ! -x "$JANOS_HOME/jarvis-core/.venv/bin/uvicorn" ]; then
     msg="JANOS not found at $JANOS_HOME (no jarvis-core/.venv). Set JANOS_HOME or /etc/janos/janos.conf."
@@ -45,10 +65,17 @@ if ! is_up; then
   done
 fi
 
+if ! own_listener; then
+  m="janos-app: port $PORT is in use by a process that is not yours; not sending the login token."
+  echo "$m" >&2
+  notify "$m"
+  exit 1
+fi
+
 # Memory dir follows the server's own override (JANOS_MEMORY_DIR), else jarvis-core/memory.
 MEM="${JANOS_MEMORY_DIR:-$JANOS_HOME/jarvis-core/memory}"
-# The login code is single-use and never printed or logged; only the URL is captured.
-if ! URL=$("$JANOS_HOME/jarvis-core/.venv/bin/python" "$JANOS_HOME/jarvis-core/janos/launch_ui.py" --print-url "$MEM" "$PORT" 2>/dev/null) || [ -z "$URL" ]; then
+# The login code is single-use and never printed or logged; it reaches the browser only through the 0600 launch.html path.
+if ! FILE=$("$JANOS_HOME/jarvis-core/.venv/bin/python" "$JANOS_HOME/jarvis-core/janos/launch_ui.py" "$MEM" "$PORT" 2>/dev/null) || [ -z "$FILE" ]; then
   echo "janos-app: could not get a login code from the server (is api_token present in $MEM?)" >&2
   notify "Could not get a JANOS login code."
   exit 1
@@ -74,11 +101,12 @@ if [ -z "$BROWSER" ]; then
   msg="No Chromium browser found. Install one for the app window: sudo snap install chromium"
   echo "janos-app: $msg" >&2
   notify "$msg"
-  exec xdg-open "$URL"
+  cleanup_later "$FILE"
+  exec xdg-open "$FILE"
 fi
 
-# The dedicated profile and localhost-only window make auto-granting camera/mic acceptable;
-# the flag auto-accepts the permission prompt.
-exec "$BROWSER" --app="$URL" --user-data-dir="$DATA/profile" --class=JANOS --name=JANOS \
-  --window-size=1400,900 --ozone-platform-hint=auto --use-fake-ui-for-media-stream \
+# Chromium will ask once for camera/microphone in the dedicated profile and remember the answer for the HUD origin; first launch shows the prompt.
+cleanup_later "$FILE"
+exec "$BROWSER" --app="file://$FILE" --user-data-dir="$DATA/profile" --class=JANOS --name=JANOS \
+  --window-size=1400,900 --ozone-platform-hint=auto \
   --no-first-run --no-default-browser-check --disable-features=Translate
