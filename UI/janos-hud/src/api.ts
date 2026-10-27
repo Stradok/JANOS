@@ -119,3 +119,14 @@ export async function transcribe(blob: Blob): Promise<string> {
   if (!r.ok) throw new Error(`/transcribe: HTTP ${r.status}`);
   return String((await r.json()).text ?? '').trim();
 }
+
+/** Push one screen JPEG (RAM-only on the server). Returns the HTTP status; 403 = server not in access: full. */
+export async function sendScreenFrame(blob: Blob, w: number, h: number): Promise<number> {
+  const r = await call('/screen/frame', { method: 'POST', headers: { 'Content-Type': 'image/jpeg', 'X-Screen-Width': String(w), 'X-Screen-Height': String(h) }, body: blob });
+  return r.status;
+}
+
+/** Drop the server's latest screen frame. */
+export async function clearScreen(): Promise<void> {
+  try { await call('/screen', { method: 'DELETE' }); } catch { /* best effort */ }
+}

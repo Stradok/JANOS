@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Volume2, VolumeX, Send, Palette, Camera, CameraOff, Mic, MicOff } from 'lucide-react';
+import { Volume2, VolumeX, Send, Palette, Camera, CameraOff, Mic, MicOff, Monitor, MonitorOff } from 'lucide-react';
 import { FragmentedOrbCanvas } from './components/FragmentedOrbCanvas';
+import { startScreenShare } from './screen';
 import { CameraPanel } from './components/CameraPanel';
 import { OrbLive, OrbSettings, VisualTheme } from './types';
 import { THEMES } from './utils/themes';
@@ -69,6 +70,7 @@ export default function App() {
   const [muted, setMuted] = useState(() => lsGet('janos_muted') === '1');
   const [camOn, setCamOn] = useState(() => lsGet('janos_camera') === '1');
   const [camLive, setCamLive] = useState(false);
+  const [scrOn, setScrOn] = useState(false);   // never persisted: opt in again on every launch
   const [toast, setToast] = useState('');
   const [reduced] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches);
   const [tele, setTele] = useState<Telemetry | null>(null);
@@ -82,6 +84,7 @@ export default function App() {
   const live = useRef<OrbLive>({ mode: 'idle', level: 0, pulse: 0, flash: 0, look: { x: 0, y: 0 } });
   const lastEp = useRef('');
   const toastT = useRef(0);
+  const scrStop = useRef<(() => void) | null>(null);
   const abort = useRef<AbortController | null>(null);
   const stageId = useRef(0);
   const logEnd = useRef<HTMLDivElement>(null);
@@ -103,6 +106,19 @@ export default function App() {
   useEffect(() => { const t = setInterval(() => setNow(new Date()), 1000); return () => clearInterval(t); }, []);
   useEffect(() => { logEnd.current?.scrollIntoView({ block: 'end' }); }, [msgs]);
   useEffect(() => { stageEnd.current?.scrollIntoView({ block: 'end' }); }, [stages]);
+
+  useEffect(() => () => scrStop.current?.(), []);
+  const toggleScreen = async () => {
+    if (scrStop.current) { scrStop.current(); return; }
+    try {
+      scrStop.current = await startScreenShare((why) => {
+        scrStop.current = null; setScrOn(false);
+        if (why === 'forbidden') say('screen sharing needs access: full');
+        else if (why === 'auth') setAuthBad(true);
+      });
+      setScrOn(true);
+    } catch { say('Screen share was cancelled'); }   // portal prompt dismissed or unavailable
+  };
 
   const onErr = useCallback((e: unknown) => {
     if (e instanceof AuthError) setAuthBad(true);
@@ -265,6 +281,10 @@ export default function App() {
             {camLive && <span className="text-[11px] tracking-widest text-red-500" role="status">● CAMERA</span>}
             <button type="button" className="hud-btn" aria-pressed={camOn} aria-label={camOn ? 'Turn camera off' : 'Turn camera on'}
               onClick={() => setCamOn((c) => !c)}>{camOn ? <Camera size={14} /> : <CameraOff size={14} />}</button>
+            {scrOn && <span className="text-[11px] tracking-widest text-red-500" role="status">● SCREEN</span>}
+            <button type="button" className="hud-btn" aria-pressed={scrOn} aria-label="Share screen with JANOS"
+              title="Frames stay in memory on this PC and are never saved." onClick={() => void toggleScreen()}>
+              {scrOn ? <Monitor size={14} /> : <MonitorOff size={14} />}</button>
             <time className="hud-label !opacity-100 text-[11px]">{now.toLocaleTimeString([], { hour12: false })}</time>
           </div>
         </header>

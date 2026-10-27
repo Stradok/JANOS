@@ -1431,6 +1431,10 @@ async def test_spotify_play() -> None:
                 async def sk(): return "x"
                 tbf.add(Tool("gen", "g", {}, sk, untrusted=True)); tbf.tainted = False; await tbf.run("gen", {})
                 check("taint: a self-written (untrusted) tool taints", tbf.tainted)
+                tbf.add(Tool("plain", "p", {}, sk)); tbf.tainted = False; await tbf.run("plain", {})
+                check("taint: deny by default (unlisted tool taints)", tbf.tainted)
+                tbf.tainted = False; await tbf.run("list_dir", {})
+                check("taint: list_dir taints", tbf.tainted)
                 # handle(): stale flag is cleared, then the deterministic intent's app_search fallback may use computer
                 supf = Supervisor(cfg); supf.toolbox = tbf; tbf.tainted = True
                 apps = Path(td) / "apps"; apps.mkdir(); T._APP_DIRS = [apps]
@@ -1730,7 +1734,7 @@ async def test_desktop_intents() -> None:
                   "desktop" in plan[0]["step"] and sup._repair_plan("what time is it", [{"step": "x", "agent": "operator"}]) == [{"step": "x", "agent": "operator"}], str(plan))
             import inspect
             check("handle() applies _repair_plan on the simple path",
-                  "self._repair_plan(turn.task, [{" in inspect.getsource(S.Supervisor.handle))
+                  "self._repair_plan(turn.task, [{" in inspect.getsource(S.Supervisor._handle))
     finally:
         T._spawn, T._APP_DIRS, T._resolve_public, T._clock, T._gdbus, S._sleep = orig
         sup.close()
@@ -1754,6 +1758,375 @@ async def test_desktop_intents() -> None:
                   and not T._write_allowed(inst / "janos" / "generated" / "t.py", ws, home))
         finally:
             T._INSTALL = real
+
+
+async def test_computer() -> None:
+    section("computer (blind ydotool keyboard/mouse) and desktop list_apps (backend mocked; no real input)")
+    import dataclasses
+    from janos import supervisor as S, tools as T
+    full = dataclasses.replace(Config.load(), access="full", desktop=True)
+    tb, tsafe = Toolbox(full), Toolbox(dataclasses.replace(Config.load(), access="safe", desktop=True))
+    sent: list = []
+    log: list = []   # ordered ('y', argv) / ('s', secs) / ('daemon',)
+    state = {"sock": True, "starts": 0, "rc": 0}
+    orig = (T._ydotool, T._sleep, T._socket_exists, T._start_ydotoold, T._clock, T._APP_DIRS, T._spawn)
+    def fake_y(args):
+        log.append(("y", args))
+        return state["rc"], "" if state["rc"] == 0 else "boom"
+    def start():
+        state["starts"] += 1
+        log.append(("daemon",))
+    T._ydotool, T._start_ydotoold = fake_y, start
+    T._sleep = lambda s: log.append(("s", s))
+    T._socket_exists = lambda: state["sock"]
+    clock = [9000.0]
+    T._clock = lambda: clock[0]
+    T._spawn = lambda argv, env_extra=None: sent.append(argv) or ""
+    ys = lambda: [e[1] for e in log if e[0] == "y"]
+    def reset():
+        log.clear(); sent.clear(); T._computer_calls.clear(); T._desktop_calls.clear()
+        state.update(sock=True, starts=0, rc=0)
+    run = lambda tool=tb, **a: tool.run("computer", a)
+    try:
+        # pydantic validation
+        reset()
+        good = [dict(action="key", keys="ctrl+shift+t"), dict(action="type", text="hello -x"), dict(action="click", button="right", x=5, y=6),
+                dict(action="move", x=8000, y=0), dict(action="move_by", x=-3000, y=3000), dict(action="scroll", amount=-20),
+                dict(action="wait", seconds=5), dict(action="app_search", query="Visual Studio-Code_1.2")]
+        rs = [await run(**g) for g in good]
+        check("computer: every action accepted with valid args", all(r.ok and r.output.endswith("(blind: the screen was not checked)") for r in rs),
+              str([r.output for r in rs if not r.ok]))
+        reset()
+        badc = [dict(action="key", keys="blorp"), dict(action="key", keys=""), dict(action="key", keys="ctrl+é"), dict(action="type", text="a\nb"),
+                dict(action="type", text="héllo"), dict(action="type", text=""), dict(action="type", text="x" * 201),
+                dict(action="click", button="back"), dict(action="click", x=5), dict(action="move", x=8001, y=1), dict(action="move", x=-1, y=1),
+                dict(action="move_by", x=3001, y=0), dict(action="scroll", amount=21), dict(action="scroll", amount=0),
+                dict(action="wait", seconds=5.1), dict(action="app_search", query=""), dict(action="app_search", query="a; rm -rf /"),
+                dict(action="app_search", query="$(x)"), dict(action="app_search", query="x" * 61), dict(action="nope")]
+        rb = [await run(**b) for b in badc]
+        check("computer: bad keys/text/coords/button/query rejected with a short message, nothing sent",
+              all(not r.ok and "Traceback" not in r.output and len(r.output) < 200 for r in rb) and not log,
+              str([(b, r.output) for b, r in zip(badc, rb) if r.ok or len(r.output) >= 200]))
+        # exact argv
+        reset()
+        await run(action="key", keys="ctrl+l"); await run(action="key", keys="Super"); await run(action="key", keys="alt+tab")
+        check("key: ctrl+l presses 29,38 and releases in reverse; super is 125:1 125:0",
+              ys()[0] == ["key", "29:1", "38:1", "38:0", "29:0"] and ys()[1] == ["key", "125:1", "125:0"]
+              and ys()[2] == ["key", "56:1", "15:1", "15:0", "56:0"], str(ys()))
+        reset()
+        await run(action="key", keys="ctrl+shift+t"); await run(action="key", keys="f12")
+        check("key: three-key combo releases in reverse; f12 is 88", ys()[0] == ["key", "29:1", "42:1", "20:1", "20:0", "42:0", "29:0"]
+              and ys()[1] == ["key", "88:1", "88:0"], str(ys()))
+        reset()
+        await run(action="type", text="--rm \\n x")
+        check("type: argv has -- before the exact text and escapes disabled", ys() == [["type", "--key-delay", "12", "-e", "0", "--", "--rm \\n x"]], str(ys()))
+        reset()
+        for b in ("left", "right", "middle"):
+            await run(action="click", button=b, x=100, y=200)
+        await run(action="click")
+        check("click: absolute move then 0xC0/0xC1/0xC2; no move without x,y",
+              ys() == [["mousemove", "--absolute", "-x", "100", "-y", "200"], ["click", "0xC0"],
+                       ["mousemove", "--absolute", "-x", "100", "-y", "200"], ["click", "0xC1"],
+                       ["mousemove", "--absolute", "-x", "100", "-y", "200"], ["click", "0xC2"], ["click", "0xC0"]], str(ys()))
+        reset()
+        await run(action="scroll", amount=3); await run(action="scroll", amount=-2); await run(action="move_by", x=-4, y=5)
+        check("scroll: positive = down = negative wheel y; move_by is relative",
+              ys() == [["mousemove", "--wheel", "-x", "0", "-y", "-3"], ["mousemove", "--wheel", "-x", "0", "-y", "2"],
+                       ["mousemove", "-x", "-4", "-y", "5"]], str(ys()))
+        # blocked combos
+        reset()
+        blocked = ["ctrl+alt+delete", "Ctrl+Alt+F3", "alt+ctrl+f12", "super+l", "L+SUPER", "win+l", "alt+sysrq", "sysrq", "ctrl+alt+backspace"]
+        rk = [await run(action="key", keys=k) for k in blocked]
+        check("blocked key combos are refused and never sent", all(not r.ok and "Refused" in r.output for r in rk) and not log,
+              str([(k, r.output) for k, r in zip(blocked, rk) if r.ok]))
+        # app_search ordering
+        reset()
+        r = await run(action="app_search", query="firefox")
+        check("app_search: super, wait, type, wait, enter in order",
+              log == [("y", ["key", "125:1", "125:0"]), ("s", 0.7), ("y", ["type", "--key-delay", "12", "-e", "0", "--", "firefox"]),
+                      ("s", 0.8), ("y", ["key", "28:1", "28:0"])] and "unverified" in r.output, str(log))
+        # access gate
+        reset()
+        rs_ = await run(tsafe, action="key", keys="enter")
+        check("computer refuses unless access=full", not rs_.ok and "access: full" in rs_.output and not log, rs_.output)
+        # rate limit
+        reset()
+        first = [(await run(action="wait", seconds=0)).ok for _ in range(60)]
+        r61 = await run(action="wait", seconds=0)
+        clock[0] += 61
+        r62 = await run(action="wait", seconds=0)
+        check("rate limit: 60 per minute, 61st refused, allowed again after the window", all(first) and not r61.ok and "60" in r61.output and r62.ok, r61.output)
+        # daemon handling
+        reset()
+        await run(action="key", keys="enter")
+        check("daemon not started when the socket exists", state["starts"] == 0)
+        reset(); state["sock"] = False
+        r = await run(action="key", keys="enter")
+        check("socket absent and daemon cannot start: explanatory failure, nothing sent, no raise",
+              not r.ok and "ydotoold is not running" in r.output and "input" in r.output and state["starts"] == 1 and not ys(), r.output)
+        reset(); state["sock"] = False
+        T._start_ydotoold = lambda: (state.__setitem__("starts", state["starts"] + 1), state.__setitem__("sock", True))
+        r = await run(action="key", keys="enter")
+        check("socket absent: daemon start attempted once, then the action runs", r.ok and state["starts"] == 1 and len(ys()) == 1, r.output)
+        T._start_ydotoold = start
+        reset(); state["rc"] = 1
+        r = await run(action="key", keys="enter")
+        check("ydotool failure is a failed result, not a traceback", not r.ok and "boom" in r.output and "Traceback" not in r.output, r.output)
+
+        # list_apps
+        reset()
+        with tempfile.TemporaryDirectory() as td:
+            apps = Path(td)
+            for i in range(70):
+                (apps / f"app{i:02d}.desktop").write_text(f"[Desktop Entry]\nType=Application\nName=Zed Thing {i}\nExec=x\n")
+            (apps / "firefox.desktop").write_text("[Desktop Entry]\nType=Application\nName=Firefox Web Browser\nExec=x\n")
+            T._APP_DIRS = [apps]
+            allr = await tsafe.run("desktop", {"action": "list_apps"})
+            fr = await tsafe.run("desktop", {"action": "list_apps", "name": "FIRE"})
+            none = await tsafe.run("desktop", {"action": "list_apps", "name": "zzzz"})
+            check("list_apps: caps at 60 lines, filters case-insensitively, reports no match",
+                  allr.ok and allr.output.count(" (") == 60 and "more" in allr.output
+                  and fr.output == "firefox (Firefox Web Browser)" and "No installed app" in none.output, allr.output[-80:] + fr.output)
+
+            # open_app -> app_search fallback
+            async def intent(cfg):
+                reset()
+                sup = Supervisor(cfg)
+                try:
+                    t = S.Turn(task="t")
+                    await sup._run_desktop_intent(t, [{"action": "open_app", "name": "nonexistentapp"}])
+                    return t
+                finally:
+                    sup.close()
+            t = await intent(full)
+            check("open_app miss in full mode falls back to computer app_search, honestly",
+                  [c["tool"] for c in t.tool_calls] == ["desktop", "computer"] and "nonexistentapp" in "".join(map(str, ys()))
+                  and "could not see the screen" in t.answer and t.score > 0, str((t.tool_calls, t.answer)))
+            t = await intent(dataclasses.replace(Config.load(), access="safe", desktop=True))
+            check("non-full mode does NOT fall back", [c["tool"] for c in t.tool_calls] == ["desktop"] and not log and "could not finish" in t.answer, t.answer)
+    finally:
+        T._ydotool, T._sleep, T._socket_exists, T._start_ydotoold, T._clock, T._APP_DIRS, T._spawn = orig
+        T._computer_calls.clear(); T._desktop_calls.clear()
+
+
+async def test_screen() -> None:
+    section("Screen sight: RAM-only buffer, routes, grounding, tool, intents (vision model mocked)")
+    import builtins, dataclasses, io, json as _json, logging
+    from fastapi.testclient import TestClient
+    from janos import screen as SC, server as srv, tools as T
+    from janos.supervisor import parse_desktop_intent as P
+    from janos.playbooks import FORBIDDEN_STEP_TOOLS
+    SENT = b"SENTINEL_PIXELS_9f3a"
+    jpg = b"\xff\xd8\xff\xe0" + SENT + b"\xff\xd9"
+    clock = [100.0]
+    orig = (SC._clock, SC._post)
+    SC._clock = lambda: clock[0]
+    SC._calls.clear()
+    try:
+        b = SC.ScreenBuffer()
+        check("buffer: empty -> latest None, inactive", b.latest() is None and b.status()["active"] is False)
+        b.put(jpg, 1920, 1080)
+        check("buffer: put/latest returns frame", b.latest() == (jpg, 1920, 1080))
+        st = b.status()
+        check("buffer: status has size/age and no image bytes",
+              st["active"] and (st["width"], st["height"]) == (1920, 1080) and SENT.decode() not in str(st) and "jpeg" not in str(st).lower())
+        clock[0] += 4.5
+        check("buffer: stale frame -> None and bytes dropped", b.latest() is None and b._jpeg is None and not b.status()["active"])
+        bad = []
+        for args in ((b"GIF89a", 10, 10), (jpg + b"x" * SC.MAX_FRAME, 10, 10), (jpg, 0, 10), (jpg, 10, 16385), (jpg, "1", 10)):
+            try:
+                b.put(*args); bad.append(args[1:])
+            except ValueError:
+                pass
+        check("buffer: non-JPEG, oversize and bad dimensions rejected", not bad and b.latest() is None, str(bad))
+        b.put(jpg, 10, 10); b.clear()
+        check("buffer: clear", b.latest() is None)
+        # no files: temp cwd listing unchanged, open/tempfile never called
+        old, d = os.getcwd(), tempfile.mkdtemp()
+        os.chdir(d)
+        real_open, real_tmp = builtins.open, tempfile.NamedTemporaryFile
+        hits: list = []
+        builtins.open = lambda *a, **k: hits.append("open") or real_open(*a, **k)
+        tempfile.NamedTemporaryFile = lambda *a, **k: hits.append("tmp") or real_tmp(*a, **k)
+        try:
+            b.put(jpg, 10, 10); b.latest(); b.status(); b.clear()
+        finally:
+            builtins.open, tempfile.NamedTemporaryFile = real_open, real_tmp
+            os.chdir(old)
+        check("buffer: put/latest creates no files and never calls open/tempfile", not os.listdir(d) and not hits, str(hits))
+        src = Path(SC.__file__).read_text()
+        check("screen module has no file or log calls", not re.search(r"\bopen\(|tempfile|logging|print\(|write_bytes|write_text", src))
+
+        # --- grounding
+        check("rel_to_px: center", SC.rel_to_px(500, 500, 1920, 1080) == (960, 540))
+        check("rel_to_px: edges clamp inside the screen",
+              SC.rel_to_px(0, 0, 1920, 1080) == (0, 0) and SC.rel_to_px(1000, 1000, 1920, 1080) == (1919, 1079)
+              and SC.rel_to_px(5000, -9, 1920, 1080) == (1919, 0))
+        garb = []
+        for v in ("500", 5.5, None, True, [1]):
+            try:
+                SC.rel_to_px(v, 1, 100, 100); garb.append(v)
+            except ValueError:
+                pass
+        check("rel_to_px: non-int garbage rejected", not garb, str(garb))
+
+        # --- routes
+        saved = os.environ.get("JANOS_MEMORY_DIR"), os.environ.get("JANOS_ACCESS")
+        os.environ["JANOS_MEMORY_DIR"] = tempfile.mkdtemp()
+        os.environ["JANOS_ACCESS"] = "safe"
+        srv._state.pop("sup", None)
+        tok = srv.api_token()
+        c = TestClient(srv.app, base_url="http://127.0.0.1")
+        h = {"Authorization": f"Bearer {tok}", "Content-Type": "image/jpeg", "X-Screen-Width": "1920", "X-Screen-Height": "1080"}
+        buf = SC.get_buffer(); buf.clear(); buf._puts.clear()
+        check("/screen routes: 401 without token",
+              c.post("/screen/frame", content=jpg).status_code == 401 and c.get("/screen/status").status_code == 401
+              and c.delete("/screen").status_code == 401)
+        r = c.post("/screen/frame", content=jpg, headers=h)
+        check("/screen/frame: 403 in safe mode and nothing stored", r.status_code == 403 and buf.latest() is None, str(r.status_code))
+        os.environ["JANOS_ACCESS"] = "full"
+        r = c.post("/screen/frame", content=jpg, headers=h)
+        s = c.get("/screen/status", headers=h)
+        check("/screen/frame: 204 in full mode, status active, no bytes in status",
+              r.status_code == 204 and s.json()["active"] and s.json()["width"] == 1920 and SENT.decode() not in s.text, f"{r.status_code} {s.text}")
+        clock[0] += 1.1
+        check("/screen/frame: 413 over cap", c.post("/screen/frame", content=b"\xff\xd8" + b"0" * SC.MAX_FRAME, headers=h).status_code == 413)
+        clock[0] += 1.1
+        codes = [c.post("/screen/frame", content=x, headers=hh).status_code for x, hh in (
+            (b"GIF89a", h), (jpg, {**h, "X-Screen-Width": "abc"}), (jpg, {**h, "X-Screen-Height": "0"}), (jpg, {k: v for k, v in h.items() if k != "X-Screen-Width"}))]
+        check("/screen/frame: 400 for non-JPEG, junk or zero size, missing header", codes == [400] * 4, str(codes))
+        clock[0] += 1.1
+        buf._puts.clear()
+        codes = [c.post("/screen/frame", content=jpg, headers=h).status_code for _ in range(7)]
+        check("/screen/frame: more than 5 frames per second -> 429", codes[:5] == [204] * 5 and codes[5:] == [429, 429], str(codes))
+        check("DELETE /screen clears the buffer", c.delete("/screen", headers=h).status_code == 204 and buf.latest() is None
+              and c.get("/screen/status", headers=h).json()["active"] is False)
+        for k, v in zip(("JANOS_MEMORY_DIR", "JANOS_ACCESS"), saved):
+            os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+
+        # --- tool (vlm HTTP mocked)
+        full = dataclasses.replace(Config.load(), access="full", desktop=True, vision_model="vtest:1b", vision_keep_alive="7m")
+        tb = Toolbox(full)
+        tsafe = Toolbox(dataclasses.replace(full, access="safe"))
+        seen: list = []
+        reply = {"v": "A terminal and a browser."}
+        async def fake_post(url, payload, timeout):
+            seen.append((url, payload, timeout))
+            return {"message": {"content": reply["v"]}}
+        SC._post = fake_post
+        buf.put(jpg, 1920, 1080)
+        run = lambda t=tb, **a: t.run("screen", a)
+        r = await run(action="look", question="what app?")
+        url, pl, to = seen[-1]
+        check("screen look: returns the model text; request has model, keep_alive, one base64 image, temperature 0",
+              r.ok and r.output == "A terminal and a browser." and pl["model"] == "vtest:1b" and pl["keep_alive"] == "7m"
+              and pl["options"] == {"temperature": 0} and pl["stream"] is False and len(pl["messages"][0]["images"]) == 1
+              and pl["messages"][0]["images"][0] == __import__("base64").b64encode(jpg).decode()
+              and "format" not in pl and to == 90 and url.endswith("/api/chat") and "DATA" in pl["messages"][0]["content"], r.output)
+        reply["v"] = "x" * 3000
+        check("screen look: output capped at 900 chars", len((await run(action="look")).output) <= 900)
+        reply["v"] = _json.dumps({"found": True, "x": 500, "y": 500, "label": "Save"})
+        r = await run(action="find", target="the Save button")
+        check("screen find: json_mode and pixel coordinates",
+              r.ok and seen[-1][1]["format"] == "json" and _json.loads(r.output) == {"found": True, "x_px": 960, "y_px": 540, "screen": [1920, 1080], "label": "Save"}, r.output)
+        reply["v"] = _json.dumps({"found": False})
+        check("screen find: not found", (await run(action="find", target="x")).output == '{"found": false}')
+        for g in ("not json at all", '{"found": true, "x": "a", "y": 2}', '{"found": "yes"}', '{"found": true, "x": 1.5, "y": 2}', "[]"):
+            reply["v"] = g
+            r = await run(action="find", target="x")
+            if r.ok or "Traceback" in r.output:
+                check("screen find: garbled model output -> failed result", False, g + " " + r.output); break
+        else:
+            check("screen find: garbled model output -> failed result, no traceback", True)
+        reply["v"] = _json.dumps({"found": True, "x": 100, "y": 0, "label": "cur"})
+        r = await run(action="cursor")
+        check("screen cursor: pixel result and cursor prompt",
+              r.ok and _json.loads(r.output)["x_px"] == 192 and "mouse cursor" in seen[-1][1]["messages"][0]["content"], r.output)
+        check("screen: bad action and empty find target rejected",
+              not (await run(action="zap")).ok and not (await run(action="find")).ok)
+        buf.clear()
+        r = await run(action="look")
+        check("screen: no frame -> sharing-off message", not r.ok and "Screen sharing is off. Click the SCREEN button" in r.output, r.output)
+        buf.put(jpg, 1920, 1080); clock[0] += 5
+        check("screen: stale frame -> sharing-off message", "Screen sharing is off" in (await run(action="look")).output)
+        buf.put(jpg, 1920, 1080)
+        rs = await run(tsafe, action="look")
+        check("screen: refused in safe mode", not rs.ok and "access: full" in rs.output, rs.output)
+        n = len(seen)
+        rd = await Toolbox(dataclasses.replace(full, desktop=False)).run("screen", {"action": "look"})
+        check("screen: refused when desktop disabled, model not called", not rd.ok and len(seen) == n)
+        SC._calls.clear()
+        res = [(await run(action="look")).ok for _ in range(31)]
+        check("screen: 30 calls/min rate limit", all(res[:30]) and not res[30])
+        check("screen: registered untrusted+danger, owned by operator, forbidden in playbooks",
+              tb.get("screen").untrusted and tb.get("screen").danger and "screen" in FORBIDDEN_STEP_TOOLS
+              and "screen" in Supervisor(full).runner.agents["operator"].tools)
+        SC._calls.clear(); T._computer_calls.clear()
+        tb.tainted = False
+        wait = {"action": "wait", "seconds": 0}
+        before = (await tb.run("computer", wait)).ok
+        await run(action="look")
+        after = await tb.run("computer", wait)
+        check("taint: a turn that used screen refuses computer", before and tb.tainted and not after.ok and "Refused" in after.output, after.output)
+
+        # --- sentinel leak: error paths, outputs, logs
+        cap = io.StringIO(); hd = logging.StreamHandler(cap); logging.getLogger().addHandler(hd)
+        old_lvl = logging.getLogger().level; logging.getLogger().setLevel(logging.DEBUG)
+        b64 = __import__("base64").b64encode(jpg).decode()
+        async def boom(url, payload, timeout):
+            raise RuntimeError("failed with " + payload["messages"][0]["images"][0])
+        async def http_err(url, payload, timeout):
+            raise SC.ScreenError("Vision model HTTP 500: " + SC._B64.sub("", payload["messages"][0]["images"][0]))
+        outs, evs = [], []
+        buf.put(jpg, 1920, 1080)
+        for fn in (boom, http_err, fake_post):
+            SC._post = fn; SC._calls.clear()
+            for a in ({"action": "look"}, {"action": "find", "target": "t"}, {"action": "cursor"}):
+                r = await run(**a); outs.append(r.output); evs.append(str(r.as_dict()))
+        try:
+            await SC.vlm(jpg, "p", cfg=full)
+        except Exception as e:
+            outs.append(repr(e) + str(e.__cause__) + str(e.__context__))
+        SC._post = boom
+        try:
+            await SC.vlm(jpg, "p", cfg=full)
+        except SC.ScreenError as e:
+            outs.append(repr(e) + str(e.__cause__) + str(e.__context__))
+        logging.getLogger().removeHandler(hd); logging.getLogger().setLevel(old_lvl)
+        blob = "\n".join(outs + evs) + cap.getvalue()
+        check("sentinel frame bytes / base64 never appear in outputs, events, exceptions or logs",
+              SENT.decode() not in blob and b64 not in blob and "U0VOVElORUw" not in blob,
+              str([k for k, v in (("sent", SENT.decode()), ("b64", b64)) if v in blob]) + str([o[:90] for o in outs + evs if b64 in o]))
+        check("vision HTTP failure gives a short ScreenError", all("Vision model" in o or "unusable" in o or "pulled" in o or o.startswith("{") or "ScreenError" in o or o for o in outs))
+        buf.clear()
+
+        # --- intents
+        want = lambda s: [{"tool": "screen", "action": "look", "question": s.strip()}]
+        phrases = ["what's on my screen", "What is on my screen?", "look at my screen", "describe my screen",
+                   "what do you see on the screen", "read my screen", "Hey Jarvis, please look at my screen!"]
+        badp = [p for p in phrases if not (P(p) and P(p)[0].get("tool") == "screen" and P(p)[0]["question"] == p.strip())]
+        check("intent: screen phrases map to screen look with the original sentence", not badp, str([(p, P(p)) for p in badp]))
+        check("intent: ordinary sentences unchanged",
+              P("what is the time") is None and P("open spotify") == [{"action": "open_app", "name": "spotify"}, {"action": "media", "command": "play"}]
+              and P("what is on my screen and then delete files") is None and P("how do I read my screen better") is None)
+        sup = Supervisor(full)
+        buf.put(jpg, 1920, 1080)
+        SC._post = fake_post; reply["v"] = "Editor open."; SC._calls.clear()
+        evl: list = []
+        sup._emit = lambda e: evl.append(e)
+        t = await sup.handle("what's on my screen?")
+        check("handle(): screen intent runs screen look through the tool path, answer is the model text",
+              t.answer == "Editor open." and [c["tool"] for c in t.tool_calls] == ["screen"] and t.score > 0 and sup.toolbox.tainted, str((t.answer, t.tool_calls)))
+        buf.clear()
+        t = await sup.handle("look at my screen")
+        check("handle(): no frame -> honest failure", "Screen sharing is off" in t.answer and t.score == 0, t.answer)
+        check("_required_tools adds screen only in full access and for screen wording",
+              "screen" in sup._required_tools("tell me what you see on my screen") and "screen" not in sup._required_tools("open the settings")
+              and "screen" in Supervisor._STEP_TEXT or "screen" in sup._STEP_TEXT)
+        sup.close()
+    finally:
+        SC._clock, SC._post = orig
+        SC._calls.clear(); T._computer_calls.clear(); SC.get_buffer().clear()
 
 
 async def test_employee_live() -> None:
@@ -1797,6 +2170,7 @@ async def main_async() -> int:
     await test_desktop()
     await test_desktop_intents()
     await test_computer()
+    await test_screen()
     await test_spotify_play()
     await test_playbooks()
     await test_voice()

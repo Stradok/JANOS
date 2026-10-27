@@ -41,6 +41,7 @@ from pydantic import BaseModel, Field
 from janos.config import Config
 from janos import persona as personas
 from janos.policy import reward
+from janos.screen import MAX_FRAME, get_buffer
 from janos.supervisor import Supervisor
 
 _state: dict[str, Any] = {}
@@ -319,6 +320,38 @@ async def get_persona() -> dict[str, Any]:
     active = personas.get(_state.get("persona"))
     return {"active": active.name,
             "available": [{"name": p.name, "label": p.label} for p in personas.PERSONAS.values()]}
+
+
+# ---- screen sight: latest JPEG frame in RAM only (janos/screen.py); full access only
+@app.post("/screen/frame", status_code=204)
+async def screen_frame(request: Request) -> Response:
+    s = _state.get("sup")
+    if not (s.config if s else Config.load()).full_access:
+        raise HTTPException(403, "Screen sharing needs access: full (safe mode never holds screen data).")
+    buf = get_buffer()
+    if not buf.allow():
+        raise HTTPException(429, "Too many frames (max 5 per second)")
+    if int(request.headers.get("content-length") or 0) > MAX_FRAME:
+        raise HTTPException(413, "Frame too large (max 1.5 MB)")
+    data = await request.body()
+    if len(data) > MAX_FRAME:
+        raise HTTPException(413, "Frame too large (max 1.5 MB)")
+    try:
+        buf.put(data, int(request.headers.get("x-screen-width", "")), int(request.headers.get("x-screen-height", "")))
+    except ValueError as e:
+        raise HTTPException(400, f"Bad frame: {e}")
+    return Response(status_code=204)
+
+
+@app.get("/screen/status")
+async def screen_status() -> dict[str, Any]:
+    return get_buffer().status()
+
+
+@app.delete("/screen", status_code=204)
+async def screen_clear() -> Response:
+    get_buffer().clear()
+    return Response(status_code=204)
 
 
 @app.post("/persona")

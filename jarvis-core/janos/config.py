@@ -42,6 +42,8 @@ class Config:
     timeout: int = 180
     keep_alive: str = "30m"     # how long Ollama keeps the model in VRAM after a call
     num_ctx: int = 8192
+    vision_model: str = "qwen3-vl:4b"   # local screen-sight model (janos/screen.py)
+    vision_keep_alive: str = "2m"
     # Low temperature: this system depends on the model emitting valid,
     # decisive JSON far more than it depends on creative variety.
     temperature: float = 0.15
@@ -89,7 +91,7 @@ class Config:
 
     def __post_init__(self) -> None:
         for f in ("model", "ollama_url", "persona", "keep_alive", "employee_cli", "employee_model", "desktop_hosts",
-                  "access", "employee_backend"):
+                  "access", "employee_backend", "vision_model", "vision_keep_alive"):
             setattr(self, f, _env(f, getattr(self, f)))
         for f in ("timeout", "num_ctx", "max_steps", "max_heal_attempts",
                   "agent_max_turns", "recall_k", "lesson_k", "shell_timeout", "employee_timeout"):
