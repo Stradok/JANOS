@@ -171,6 +171,10 @@ _URL = (r"(?:https?://\S+|[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|org|net|io|dev|tv|
         r"(?:/\S*)?)")
 
 
+_NOT_MUSIC = re.compile(r"^(?:(?:the|a|an|my) )?(?:guitar|piano|drums?|violin|chess|games?|videos?|football|cricket|tennis)\b|^with\b")
+_PLAY_STOP = {"and", "then", "or", "but", "file", "files", "script", "code", "report", "document", "folder", "project", "repo"}
+
+
 def parse_desktop_intent(task: str) -> list[dict[str, str]] | None:
     """Ordered `desktop` tool-call args for an unambiguous simple request, else None."""
     t = task.lower().strip()
@@ -191,14 +195,15 @@ def parse_desktop_intent(task: str) -> list[dict[str, str]] | None:
     if re.fullmatch(r"(?:previous|last|go back)(?: (?:the )?(?:song|track))|previous", t):
         return media("previous")
     if re.fullmatch(r"(?:play|open|launch|start)(?: up)? (?:the |my )?spotify"
-                    r"|play (?:a song|some music|music|something|anything|a track|songs?)(?: (?:on|in|with) spotify)", t):
+                    r"|play (?:a song|some music|music|something|anything|a track|songs?)(?: (?:on|in|with) spotify)?", t):
         return spotify
-    m = re.fullmatch(r"play (?:me )?([\w '&.-]{1,80}?) (?:on|in|with) spotify", t)
+    m = re.fullmatch(r"play (?:me )?([\w '&.-]{1,100}?)(?: (?:on|in|with) spotify)?", t)
     if m:
-        q = re.sub(r"^(?:anything|something|some music|music|songs?|a song|any song)(?: by)? ", "", m.group(1))
+        q = re.sub(r"^(?:(?:anything|something|some music|music|songs?|a song|any song)(?: by)?|some) ", "", m.group(1))
         q = re.sub(r"\s+by\s+", " ", q).strip()
-        if q and not {"and", "then", "or", "but"} & set(q.split()):
-            return spotify[:1] + [{"action": "open_url", "url": "spotify:search:" + quote(q, safe="")}]
+        if (q and not _NOT_MUSIC.search(q) and not _PLAY_STOP & set(q.split()) and not re.search(r"\w\.\w", q)
+                and not re.match(r"(?:it|that|this|them|again)$", q)):
+            return spotify[:1] + [{"action": "play", "query": q}]
         return None
     m = re.fullmatch(rf"(?:open|go to|visit|browse to)(?: the)? ({_URL})", t)
     if m:
@@ -208,6 +213,27 @@ def parse_desktop_intent(task: str) -> list[dict[str, str]] | None:
     if m and not _APP_STOP & set(m.group(1).split()):
         return [{"action": "open_app", "name": m.group(1)}]
     return None
+
+
+_LINK = re.compile(r"https?://[^\s<>\"'`\])]+")
+
+
+def _norm_link(u: str) -> str:
+    u = u.rstrip(".,;:!?)]}'\"*").split("#")[0].split("?")[0]
+    return u.lower().rstrip("/")
+
+
+def unsupported_links(answer: str, task: str, tool_calls: list[dict[str, Any]] | None) -> list[str]:
+    """URLs with a path in the answer that neither the request nor any tool output contained."""
+    seen = {_norm_link(u) for text in [task, *(str(c.get("output", "")) for c in tool_calls or [])]
+            for u in _LINK.findall(text)}
+    bad = []
+    for u in map(_norm_link, _LINK.findall(answer)):
+        if u.count("/") < 3:      # bare domain: https://example.com
+            continue
+        if not any(u == s or u.startswith(s + "/") and s.count("/") >= 3 or s.startswith(u + "/") for s in seen):
+            bad.append(u)
+    return bad[:3]
 
 
 @dataclass
@@ -243,6 +269,7 @@ class Turn:
 
 
 _sleep = asyncio.sleep   # tests replace this
+_INVENTED = "Answer contains a link that no tool returned; do not invent URLs"
 
 
 class Supervisor:
@@ -589,9 +616,9 @@ Request: {task}
         "write_file": "Write the result to the file named in the request.",
         "desktop": "Call the desktop tool now; do not answer with instructions. To play music: "
                    "desktop(action=open_app, name=spotify), then desktop(action=media, command=play). "
-                   "To open a site: desktop(action=open_url, url=...). For a specific song, open_url "
-                   "spotify:search:<query>. Report only what it returned; say playing only if "
-                   "desktop(action=media, command=status) confirms.",
+                   "To open a site: desktop(action=open_url, url=...). For a specific song: "
+                   "desktop(action=play, query=<song and artist>). Report only what it returned; say playing only if "
+                   "it says Now playing or desktop(action=media, command=status) confirms.",
         "computer": "Call the computer tool (blind keyboard/mouse; one action per call; it cannot see the screen, so "
                     "report only what was sent). To start an app desktop cannot find: computer(action=app_search, query=<name>).",
         "create_tool": "Call the create_tool tool to build the tool this request asks for, "
@@ -770,6 +797,7 @@ Rules:
         bad_maths = check_arithmetic(answer)
         missing = self._missing_files(task)
         uncalled = self._uncalled_must(task, tool_calls)
+        invented = unsupported_links(answer, task, tool_calls)
 
         # Side effects live in the tool log, not the prose. Without this the
         # reviewer marks "write it to specs.md" unmet even when the file exists.
@@ -786,7 +814,7 @@ Rules:
         # this, and its call plus any heal retry are most of the latency — so
         # accept directly. Knowledge-only answers (no tool) and anything with a
         # maths, file or execution problem still go to the critic below.
-        if (self.config.fast_verify and not bad_maths and not missing and not uncalled and not errors
+        if (self.config.fast_verify and not bad_maths and not missing and not uncalled and not invented and not errors
                 and tool_calls and all(c.get("ok") for c in tool_calls)):
             return {"score": 0.9, "ok": True, "issues": [], "fix": "", "fast": True}
 
@@ -842,7 +870,7 @@ concretely what to do differently. Never return a failing score with no issues.
             # Reviewer unavailable: don't block the answer, but don't trust it
             # either — and the arithmetic check still stands on its own.
             hard = (bad_maths + [f"{f} was never created" for f in missing]
-                    + [f"{t} was never called successfully" for t in uncalled])
+                    + [f"{t} was never called successfully" for t in uncalled] + [_INVENTED + ": " + u for u in invented])
             return {
                 "score": 0.3 if hard else 0.5,
                 "ok": not hard,
@@ -878,12 +906,17 @@ concretely what to do differently. Never return a failing score with no issues.
             fix = (f"You must call the `{uncalled[0]}` tool; do not answer with instructions. "
                    f"Never claim it was done unless it returned success.")
 
+        if invented:
+            issues = [_INVENTED + ": " + u for u in invented] + issues
+            score = min(score, 0.3)
+            fix = _INVENTED + ". Remove or replace " + ", ".join(invented) + " with a URL from a tool result."
+
         return {
             "score": score,
             # Derived from the score rather than the model's own `ok` flag: it
             # regularly returns score 0.7 alongside ok=false, and honouring that
             # contradiction spends two more executions to no purpose.
-            "ok": (score >= self.config.min_pass_score and not bad_maths and not missing and not uncalled),
+            "ok": (score >= self.config.min_pass_score and not bad_maths and not missing and not uncalled and not invented),
             "issues": issues,
             "fix": fix,
         }
@@ -948,6 +981,7 @@ or the only available lesson is a truism.
     async def handle(self, task: str) -> Turn:
         started = time.perf_counter()
         turn = Turn(task=task.strip())
+        self.toolbox.tainted = False   # per-turn: `computer` is refused once untrusted content was read
         if not turn.task:
             turn.answer = "Say something and I'll get to work."
             return turn
@@ -1106,6 +1140,8 @@ or the only available lesson is a truism.
                            "it does not start playback, so press play on the song.")
             elif c["action"] == "open_url":
                 say.append(f"Opened {c['url']}.")
+            elif c["action"] == "play":
+                say.append(r.output)
             else:
                 say.append(r.output + " Playback state not checked." if c["command"] == "play" else r.output)
         if failed:

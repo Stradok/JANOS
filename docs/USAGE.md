@@ -273,6 +273,16 @@ scraping stack — so the only download JANOS needs is the one LLM.
 
 ---
 
+## Spotify playback by name
+
+"play travis scott" searches Spotify and starts the first matching track. Without keys it only opens Spotify's search page and says so.
+
+1. Create an app at <https://developer.spotify.com/dashboard>; any redirect URI works, e.g. `http://127.0.0.1:8000/cb`.
+2. Put the client id on line 1 and the client secret on line 2 of `memory/.spotify_key`.
+3. `chmod 600 memory/.spotify_key` (a group/world-readable file is refused).
+
+Limits: needs the Spotify desktop app, logged in; free accounts may refuse playback started from outside the app (JANOS then reports what Spotify says, not "playing"). The file is git-ignored; the secret is never logged or returned.
+
 ## What it can and cannot reach on the internet
 
 **Works:** DuckDuckGo search (HTML endpoint plus the instant-answer API),

@@ -249,6 +249,7 @@ class ToolForge:
             params=_parse_params(code) or {},
             run=fn,
             danger=True,
+            untrusted=True,
         ))
         return True
 

@@ -235,6 +235,7 @@ class PlaybookForge:
             params={k: str(v) for k, v in pb["params"].items()},
             run=run,
             danger=False,
+            untrusted=True,
         )
         tool.is_playbook = True  # type: ignore[attr-defined]
         self.toolbox.add(tool)

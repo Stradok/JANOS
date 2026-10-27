@@ -34,7 +34,7 @@ from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Annotated, Any, Awaitable, Callable, Literal, Union
-from urllib.parse import parse_qs, parse_qsl, quote_plus, urlparse
+from urllib.parse import parse_qs, parse_qsl, quote, quote_plus, urlparse
 
 import httpx
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError, field_validator, model_validator
@@ -70,6 +70,7 @@ class Tool:
     params: dict[str, str]
     run: Callable[..., Awaitable[str]]
     danger: bool = False
+    untrusted: bool = False   # self-written: its output counts as untrusted content (see Toolbox.tainted)
 
     def signature(self) -> str:
         args = ", ".join(f"{k}: {v}" for k, v in self.params.items()) or "no arguments"
@@ -86,7 +87,7 @@ class ToolResult:
 
     def as_dict(self) -> dict[str, Any]:
         return {"tool": self.tool, "args": self.args, "ok": self.ok,
-                "output": self.output[:800], "ms": self.ms}
+                "output": self.output[:2000], "ms": self.ms}
 
 
 # --------------------------------------------------------------------- HTML
@@ -286,6 +287,7 @@ def _scrub_env(env: dict[str, str]) -> dict[str, str]:
     return {k: v for k, v in env.items() if not _SECRET_NAME.search(k)}
 _desktop_calls: deque[float] = deque()
 _clock = time.monotonic   # tests replace this
+_asleep = asyncio.sleep   # tests replace this
 _ENV_KEEP = ("HOME", "PATH", "DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY",
              "DBUS_SESSION_BUS_ADDRESS", "LANG", "YDOTOOL_SOCKET")
 
@@ -660,11 +662,55 @@ def _computer_rate_ok() -> bool:
 
 
 
+# ---- Spotify playback by name. Hosts are constants: the model supplies only the query text.
+_SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token"
+_SPOTIFY_SEARCH_URL = "https://api.spotify.com/v1/search"
+_SPOTIFY_URI = re.compile(r"spotify:track:[A-Za-z0-9]{22}")
+_spotify_token: dict[str, Any] = {}   # {"id", "value", "exp"}; in-process cache only
+_SEARCH_ONLY = ("I opened Spotify's search for {q!r} but could not start playback by name: "
+                "add Spotify API keys (see docs) to enable that.")
+# Untrusted-content tools: once one runs, `computer` (blind keyboard/mouse) is refused for the turn.
+_TAINT_TOOLS = frozenset({"web_search", "web_fetch", "web_brief", "browser_fetch", "read_file", "search_python_changes",
+                          "shell", "run_python", "recall_memory"})
+
+
+def _spotify_creds(memory_dir: Path) -> tuple[str, str] | None:
+    """(client id, secret) from <memory_dir>/.spotify_key, None if absent; refuses a group/world-readable file."""
+    f = memory_dir / ".spotify_key"
+    try:
+        st = f.stat()
+    except OSError:
+        return None
+    if st.st_mode & 0o077:
+        raise DesktopError(f"Refused: {f} is readable by others; run chmod 600 on it.")
+    lines = f.read_text().split("\n")
+    return (lines[0].strip(), lines[1].strip()) if len(lines) > 1 and lines[0].strip() and lines[1].strip() else None
+
+
+async def _spotify_find(creds: tuple[str, str], query: str) -> tuple[str, str, str]:
+    """Client-credentials token (cached until ~60 s before expiry), then the first track hit: (uri, title, artists)."""
+    async with httpx.AsyncClient(timeout=8) as c:
+        if _spotify_token.get("id") != creds[0] or _clock() >= _spotify_token.get("exp", 0):
+            r = await c.post(_SPOTIFY_TOKEN_URL, data={"grant_type": "client_credentials"}, auth=creds)
+            r.raise_for_status()
+            j = r.json()
+            _spotify_token.update(id=creds[0], value=str(j["access_token"]), exp=_clock() + float(j["expires_in"]) - 60)
+        r = await c.get(_SPOTIFY_SEARCH_URL, params={"q": query, "type": "track", "limit": 1},
+                        headers={"Authorization": "Bearer " + _spotify_token["value"]})
+        if r.status_code == 401:
+            _spotify_token.clear()
+        r.raise_for_status()
+        t = r.json()["tracks"]["items"][0]
+        clean = lambda v: re.sub(r"[\x00-\x1f\x7f]", " ", str(v))[:100]
+        return t["uri"], clean(t["name"]), clean(", ".join(a["name"] for a in t["artists"]))
+
+
 class Toolbox:
     def __init__(self, config: Config, memory: Any = None):
         self.config = config
         self.memory = memory
         self._tools: dict[str, Tool] = {}
+        self.tainted = False   # set once an untrusted-content tool ran this turn; Supervisor.handle resets it
         self._register_all()
 
     # ------------------------------------------------------------- registry
@@ -690,6 +736,8 @@ class Toolbox:
             near = ", ".join(sorted(self._tools)[:12])
             return ToolResult(name, args, f"No such tool '{name}'. Available: {near}", False)
 
+        if name in _TAINT_TOOLS or tool.untrusted:
+            self.tainted = True
         started = datetime.now()
         try:
             clean = {k: v for k, v in args.items() if k in tool.params}
@@ -1174,12 +1222,51 @@ class Toolbox:
                 fh.write(f"\n## {title or 'Note'} — {stamp}\n{body}\n")
             return f"Saved note {title!r} to {notes}"
 
-        async def desktop(action: str = "", name: str = "", url: str = "", command: str = "") -> str:
+        async def spotify_play(query: str) -> str | None:
+            """Search by name and start the track over MPRIS; None means fall back to the search page."""
+            creds = _spotify_creds(cfg.memory_dir)
+            if not creds:
+                return None
+            try:
+                uri, title, artist = await _spotify_find(creds, query)
+            except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError):
+                return None   # 401/429/timeout/no hit: the search page is the honest fallback
+            if not isinstance(uri, str) or not _SPOTIFY_URI.fullmatch(uri):
+                raise DesktopError("Refused: Spotify returned an unexpected track URI.")
+            list_names = ["call", "--session", "--dest", "org.freedesktop.DBus", "--object-path", "/org/freedesktop/DBus",
+                          "--method", "org.freedesktop.DBus.ListNames"]
+            bus = ""
+            for i in range(9):
+                rc, out = await asyncio.to_thread(_gdbus, list_names)
+                bus = next(iter(re.findall(r"org\.mpris\.MediaPlayer2\.spotify[\w.\-]*", out)), "") if rc == 0 else ""
+                if bus or i == 8:
+                    break
+                if i == 0:
+                    await desktop(action="open_app", name="spotify")
+                await _asleep(1)   # ponytail: polls up to ~8 s for the app to claim its bus name
+            if not bus:
+                raise DesktopError("Spotify did not appear on the session bus; open it and try again.")
+            # gdbus parses arguments as GVariant text, so a string is single-quoted (the URI is validated alphanumeric)
+            rc, out = await asyncio.to_thread(_gdbus, ["call", "--session", "--dest", bus, "--object-path", "/org/mpris/MediaPlayer2",
+                                                       "--method", "org.mpris.MediaPlayer2.Player.OpenUri", f"'{uri}'"])
+            if rc != 0:
+                raise DesktopError(f"OpenUri failed on {bus}: {out[:160]}")
+            await _asleep(2)
+            try:
+                status = await asyncio.to_thread(_media, "status")
+            except DesktopError:
+                status = ""
+            track = status.partition("track: ")[2].lower()
+            if "Playing" in status.partition(";")[0] and title.lower() in track:
+                return f"Now playing: {title} - {artist}"
+            return f"Asked Spotify to play {title} by {artist}; it reports {status or 'an unknown state'}."
+
+        async def desktop(action: str = "", name: str = "", url: str = "", command: str = "", query: str = "") -> str:
             if not cfg.desktop:
                 raise DesktopError("Desktop control is disabled in config (desktop: false).")
             action = action.strip().lower()
-            if action not in ("open_app", "open_url", "media", "list_apps"):
-                raise DesktopError("action must be open_app, open_url, media or list_apps.")
+            if action not in ("open_app", "open_url", "media", "list_apps", "play"):
+                raise DesktopError("action must be open_app, open_url, media, play or list_apps.")
             full = cfg.full_access
             if action == "list_apps":   # read-only: does not use a rate-limit slot
                 q = name.strip().lower()
@@ -1192,6 +1279,15 @@ class Toolbox:
                 raise DesktopError(f"Refused: more than {limit} desktop actions in a minute. Wait and stop repeating.")
             if action == "media":
                 return await asyncio.to_thread(_media, command.strip().lower())
+            fallback = ""
+            if action == "play":
+                q = query.strip()
+                if not 1 <= len(q) <= 100 or not q.isprintable():
+                    raise DesktopError("Refused: query must be 1-100 printable characters.")
+                said = await spotify_play(q)
+                if said is not None:
+                    return said
+                action, url, fallback = "open_url", "spotify:search:" + quote(q, safe=""), _SEARCH_ONLY.format(q=q)
             if action == "open_app":
                 app = _find_app(name, full)
                 argv, env_extra = _launch_argv(app, _desktop_entries(full)[app][1], full)
@@ -1223,7 +1319,7 @@ class Toolbox:
                     why = (await _resolve_public(u.hostname))[1]
                     if why:
                         raise DesktopError(f"Refused: internal or unresolvable target ({why}).")
-                argv, done = ["xdg-open", url], f"Opened {url}."
+                argv, done = ["xdg-open", url], fallback or f"Opened {url}."
             err = await asyncio.to_thread(_spawn, argv, env_extra)
             if err:
                 raise DesktopError(err)
@@ -1233,6 +1329,9 @@ class Toolbox:
                            button: str = "left", amount: int = 0, query: str = "", seconds: float = 0) -> str:
             if not (cfg.full_access and cfg.desktop):
                 raise DesktopError("Refused: computer (keyboard/mouse) needs access: full and desktop enabled in config.")
+            if self.tainted:
+                raise DesktopError("Refused: this turn already read web/file/tool content; keyboard and mouse control "
+                                   "only runs on turns that start from the user's own request.")
             act = action.strip().lower()
             if act not in _CMP_FIELDS:
                 raise DesktopError(f"action must be one of: {', '.join(_CMP_FIELDS)}.")
@@ -1269,10 +1368,10 @@ class Toolbox:
              {"fmt": "str (optional strftime)"}, now, False),
             ("system_info", "Report CPU, RAM, disk and GPU status.",
              {"what": "str: all|cpu|memory|disk|gpu"}, system_info, False),
-            ("desktop", "Control the user's desktop (outside the sandbox): action=open_app name=<app name> launches an installed app; action=open_url url=<spotify URI or http(s) URL on an allowed site>; action=media command=play|pause|play_pause|next|previous|status controls the running music player; action=list_apps name=<optional filter> lists installed apps as id (Name).",
-             {"action": "str: open_app|open_url|media|list_apps", "name": "str (open_app, list_apps filter)", "url": "str (open_url)",
-              "command": "str (media)"}, desktop, True),
-            ("computer", "BLIND keyboard and mouse (access=full only; Wayland via ydotool). It cannot see the screen and cannot confirm anything happened: report only what was sent. One action per call. Prefer the desktop tool; use this only for UI steps desktop cannot do. action=key keys=<ctrl+l|super|enter|alt+tab|f5>; action=type text=<printable ASCII, max 200; use key enter for newline>; action=click button=left|right|middle [x,y to move first]; action=move x,y (absolute); action=move_by x,y (relative); action=scroll amount=<-20..20, positive=down>; action=wait seconds=0..5; action=app_search query=<app name> (opens GNOME search, types it, presses enter: launches the first hit unverified). Never type passwords or secrets.",
+            ("desktop", "Control the user's desktop (outside the sandbox): action=open_app name=<app name> launches an installed app; action=open_url url=<spotify URI or http(s) URL on an allowed site>; action=media command=play|pause|play_pause|next|previous|status controls the running music player; action=list_apps name=<optional filter> lists installed apps as id (Name); action=play query=<song and artist> plays that track on Spotify by name (needs Spotify API keys; otherwise only opens Spotify's search page, never claim playback).",
+             {"action": "str: open_app|open_url|media|play|list_apps", "name": "str (open_app, list_apps filter)", "url": "str (open_url)",
+              "command": "str (media)", "query": "str (play)"}, desktop, True),
+            ("computer", "BLIND keyboard and mouse (access=full only; Wayland via ydotool). It cannot see the screen and cannot confirm anything happened: report only what was sent. One action per call. Prefer the desktop tool; use this only for UI steps desktop cannot do. action=key keys=<ctrl+l|super|enter|alt+tab|f5>; action=type text=<printable ASCII, max 200; use key enter for newline>; action=click button=left|right|middle [x,y to move first]; action=move x,y (absolute); action=move_by x,y (relative); action=scroll amount=<-20..20, positive=down>; action=wait seconds=0..5; action=app_search query=<app name> (opens GNOME search, types it, presses enter: launches the first hit unverified). Never type passwords or secrets. REFUSED on any turn that already ran web_search, web_fetch, browser_fetch, read_file, shell, run_python, recall_memory or a self-written tool (untrusted content must not steer input).",
              {"action": "str: key|type|click|move|move_by|scroll|wait|app_search", "keys": "str (key)", "text": "str (type)",
               "x": "int (click|move|move_by)", "y": "int (click|move|move_by)", "button": "str (click)=left",
               "amount": "int (scroll)", "query": "str (app_search)", "seconds": "float (wait)"}, computer, True),

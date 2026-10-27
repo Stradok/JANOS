@@ -1258,6 +1258,198 @@ async def test_full_access() -> None:
         sup.close()
 
 
+async def test_spotify_play() -> None:
+    section("Spotify playback by name, invented-URL guard, computer taint (httpx, gdbus, spawn all mocked)")
+    import stat
+    from janos import supervisor as S, tools as T
+    SECRET = "SENTINEL-SECRET-xyz"
+    TID = "6gBFPUFcJLzWGx4lenP6h2"
+    cfg = Config.load()
+    orig = (T.httpx.AsyncClient, T._gdbus, T._spawn, T._asleep, T._clock, T._resolve_public, cfg.memory_dir, cfg.desktop, cfg.access, T._APP_DIRS)
+    http: list = []
+    api = {"token_status": 200, "search_status": 200, "uri": f"spotify:track:{TID}", "raise": None}
+
+    class Resp:
+        def __init__(self, status, body): self.status_code, self._b = status, body
+        def json(self): return self._b
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise T.httpx.HTTPStatusError("bad", request=None, response=None)
+
+    class FakeClient:
+        def __init__(self, **kw): http.append(("init", kw))
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, url, **kw):
+            http.append(("post", url, kw))
+            if api["raise"]: raise api["raise"]
+            return Resp(api["token_status"], {"access_token": "tok", "expires_in": 3600})
+        async def get(self, url, **kw):
+            http.append(("get", url, kw))
+            item = {"uri": api["uri"], "name": "Goosebumps", "artists": [{"name": "Travis Scott"}]}
+            return Resp(api["search_status"], {"tracks": {"items": [item]}})
+
+    gd: list = []
+    st = {"bus": "(['org.mpris.MediaPlayer2.spotify'],)", "status": "(<'Playing'>,)",
+          "meta": "(<{'xesam:title': <'Goosebumps'>, 'xesam:artist': <['Travis Scott']>}>,)"}
+    def fake_gdbus(args):
+        gd.append(list(args))
+        if "ListNames" in args[-1]: return 0, st["bus"]
+        if "PlaybackStatus" in args: return 0, st["status"]
+        if "Metadata" in args: return 0, st["meta"]
+        return 0, "()"
+    spawned: list = []
+    async def noslp(sec): pass
+    async def fake_resolve(host): return "93.184.216.34", ""
+    T.httpx.AsyncClient, T._gdbus, T._asleep, T._resolve_public = FakeClient, fake_gdbus, noslp, fake_resolve
+    T._spawn = lambda argv, env_extra=None: spawned.append(list(argv)) or ""
+    now = [9000.0]
+    T._clock = lambda: now[0]
+    sup = None
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            cfg.memory_dir, cfg.desktop = Path(td), True
+            key = Path(td) / ".spotify_key"
+            key.write_text(f"client-id\n{SECRET}\n"); key.chmod(0o600)
+            tb = Toolbox(cfg)
+            def fresh():
+                T._desktop_calls.clear(); T._spotify_token.clear(); http.clear(); gd.clear(); spawned.clear()
+                api.update(token_status=200, search_status=200, uri=f"spotify:track:{TID}", raise_=None)
+                api["raise"] = None
+            async def play(q="goosebumps travis scott"):
+                return await tb.run("desktop", {"action": "play", "query": q})
+            leaks = lambda *outs: any(SECRET in str(o) for o in outs)
+
+            fresh()
+            r = await play()
+            post = next(h for h in http if h[0] == "post"); get = next(h for h in http if h[0] == "get")
+            check("play: token request is client-credentials with basic auth to the fixed host",
+                  post[1] == "https://accounts.spotify.com/api/token" and post[2]["data"] == {"grant_type": "client_credentials"}
+                  and post[2]["auth"] == ("client-id", SECRET) and http[0][1]["timeout"] == 8, str(post[1:]))
+            check("play: search request is the fixed host with type=track limit=1 and a bearer token",
+                  get[1] == "https://api.spotify.com/v1/search" and get[2]["params"] == {"q": "goosebumps travis scott", "type": "track", "limit": 1}
+                  and get[2]["headers"] == {"Authorization": "Bearer tok"}, str(get[1:]))
+            open_uri = [g for g in gd if g[-2:-1] == ["org.mpris.MediaPlayer2.Player.OpenUri"]]
+            check("play: OpenUri argv is exact", open_uri == [["call", "--session", "--dest", "org.mpris.MediaPlayer2.spotify",
+                  "--object-path", "/org/mpris/MediaPlayer2", "--method", "org.mpris.MediaPlayer2.Player.OpenUri",
+                  f"'spotify:track:{TID}'"]], str(open_uri))
+            check("play: says Now playing only because status is Playing and the title matches",
+                  r.ok and r.output == "Now playing: Goosebumps - Travis Scott", r.output)
+            await play(); await play()
+            check("play: token is cached between plays", sum(1 for h in http if h[0] == "post") == 1)
+
+            fresh(); st["status"] = "(<'Paused'>,)"
+            r = await play()
+            check("play: not Playing -> honest 'Asked Spotify' wording", r.ok and r.output.startswith("Asked Spotify to play Goosebumps by Travis Scott; it reports")
+                  and "Paused" in r.output and "Now playing" not in r.output, r.output)
+            fresh(); st["status"] = "(<'Playing'>,)"; st["meta"] = "(<{'xesam:title': <'Other'>, 'xesam:artist': <['X']>}>,)"
+            r = await play()
+            check("play: Playing but a different title is not claimed", r.ok and "Now playing" not in r.output, r.output)
+            st["meta"] = "(<{'xesam:title': <'Goosebumps'>, 'xesam:artist': <['Travis Scott']>}>,)"
+
+            for bad in (f"https://evil/{TID}", "spotify:track:short", f"spotify:track:{TID}x", "spotify:track:" + "!" * 22, "javascript:1"):
+                fresh(); api["uri"] = bad
+                r = await play()
+                check(f"play: refuses API uri {bad[:30]!r}", not r.ok and "Refused" in r.output and not any("OpenUri" in g[-2] for g in gd if len(g) > 1), r.output)
+            api["uri"] = f"spotify:track:{TID}"
+
+            want = "I opened Spotify's search for 'goosebumps travis scott' but could not start playback by name: add Spotify API keys (see docs) to enable that."
+            for label, setup in (("401", lambda: api.update(search_status=401)), ("429", lambda: api.update(search_status=429)),
+                                 ("token 401", lambda: api.update(token_status=401)),
+                                 ("timeout", lambda: api.__setitem__("raise", T.httpx.ReadTimeout("t")))):
+                fresh(); api.update(token_status=200, search_status=200); setup()
+                r = await play()
+                check(f"play: {label} falls back to the search page with the exact honest message",
+                      r.ok and r.output == want and spawned == [["xdg-open", "spotify:search:goosebumps%20travis%20scott"]], f"{r.output} {spawned}")
+                check(f"play: {label} leaks no secret", not leaks(r.output, spawned, gd))
+            api["raise"] = None; api.update(token_status=200, search_status=200)
+            fresh(); key.rename(Path(td) / "k.bak")
+            r = await play()
+            check("play: no credentials -> search page fallback, no HTTP", r.ok and r.output == want and not http, f"{r.output} {http}")
+            (Path(td) / "k.bak").rename(key)
+            for bad in ("", "x" * 101, "a\nb", "a\x00b"):
+                fresh(); r = await play(bad)
+                check(f"play: rejects query {bad[:8]!r}", not r.ok and "Refused" in r.output and not http and not spawned, r.output)
+            fresh(); key.chmod(0o640)
+            r = await play()
+            check("play: group-readable key file refused, secret not shown", not r.ok and "chmod 600" in r.output and not http and not leaks(r.output), r.output)
+            key.chmod(0o600)
+            fresh(); evs: list = []
+            sup = Supervisor(cfg); sup.toolbox = Toolbox(cfg); sup.on_event = evs.append
+            sup.toolbox._tools["desktop"] = tb.get("desktop")
+            turn = S.Turn(task="play goosebumps by travis scott")
+            await sup._run_desktop_intent(turn, S.parse_desktop_intent(turn.task))
+            check("intent: play answer is the tool result verbatim; secret in no event/answer/log",
+                  turn.answer.endswith("Now playing: Goosebumps - Travis Scott") and turn.score > 0
+                  and not leaks(turn.answer, evs, turn.tool_calls), turn.answer)
+
+            # ---- invented-URL guard
+            sup.close(); sup = Supervisor(cfg)
+            u = f"https://open.spotify.com/track/{TID}"
+            ans = f"Here you go: {u}."
+            v = await sup._verify("play travis scott", ans, [], [{"tool": "web_search", "ok": True, "output": "nothing relevant"}])
+            check("url guard: an unsupported link fails with the hint, not fast-accepted",
+                  not v["ok"] and v["score"] <= 0.3 and "do not invent URLs" in v["fix"] and not v.get("fast"), str(v))
+            v = await sup._verify("play travis scott", ans, [], [{"tool": "web_search", "ok": True, "output": f"1. Song - {u}?si=abc"}])
+            check("url guard: the same link present in a tool output passes", v["ok"], str(v))
+            v = await sup._verify("x", "See https://example.com for more.", [], [{"tool": "web_search", "ok": True, "output": "n"}])
+            check("url guard: a bare domain passes", v["ok"], str(v))
+            v = await sup._verify("x", "Docs: https://a.com/docs/guide/intro.", [], [{"tool": "web_fetch", "ok": True, "output": "see https://a.com/docs/guide"}])
+            check("url guard: path-boundary prefix of a seen link passes", v["ok"], str(v))
+            v = await sup._verify("x", "Docs: https://a.com/docs/guidebook", [], [{"tool": "web_fetch", "ok": True, "output": "see https://a.com/docs/guide"}])
+            check("url guard: a non-boundary prefix does not", not v["ok"], str(v))
+            v = await sup._verify("x", "https://a.com/secret/page", [], [{"tool": "web_fetch", "ok": True, "output": "seen https://a.com"}])
+            check("url guard: a bare seen host does not vouch for invented paths", not v["ok"], str(v))
+            t2 = S.Turn(task="go to https://github.com/x/y")
+            await sup._run_desktop_intent(t2, S.parse_desktop_intent(t2.task))
+            v = await sup._verify(t2.task, t2.answer, [], t2.tool_calls)
+            check("url guard: a deterministic-intent answer that quotes its URL passes", v["ok"] and "github.com/x/y" in t2.answer, str((v, t2.answer)))
+
+            # ---- taint
+            cfg.access = "full"
+            tbf = Toolbox(cfg)
+            from janos.tools import Tool
+            async def stub(**kw): return "x"
+            for tname in ("web_search", "web_fetch", "browser_fetch", "read_file", "shell", "run_python", "recall_memory"):
+                tbf._tools[tname] = Tool(tname, "s", {}, stub)
+            T._computer_calls.clear()
+            o2 = (T._ydotool, T._start_ydotoold, T._socket_exists)
+            T._ydotool = lambda a: (0, ""); T._start_ydotoold = lambda: None; T._socket_exists = lambda *a: True
+            wait = {"action": "wait", "seconds": 0}
+            try:
+                ok0 = await tbf.run("computer", wait)
+                await tbf.run("web_search", {})
+                blocked = await tbf.run("computer", wait)
+                check("taint: computer allowed on a fresh turn, refused after web_search",
+                      ok0.ok and not blocked.ok and "already read web/file/tool content" in blocked.output, f"{ok0.output} | {blocked.output}")
+                for tname in ("web_fetch", "browser_fetch", "read_file", "shell", "run_python", "recall_memory"):
+                    tbf.tainted = False; await tbf.run(tname, {})
+                    check(f"taint: {tname} taints", tbf.tainted)
+                tbf.tainted = False
+                await tbf.run("desktop", {"action": "list_apps"})
+                check("taint: desktop does not taint and computer still runs", (await tbf.run("computer", wait)).ok)
+                async def sk(): return "x"
+                tbf.add(Tool("gen", "g", {}, sk, untrusted=True)); tbf.tainted = False; await tbf.run("gen", {})
+                check("taint: a self-written (untrusted) tool taints", tbf.tainted)
+                # handle(): stale flag is cleared, then the deterministic intent's app_search fallback may use computer
+                supf = Supervisor(cfg); supf.toolbox = tbf; tbf.tainted = True
+                apps = Path(td) / "apps"; apps.mkdir(); T._APP_DIRS = [apps]
+                orig_sl = T._sleep; T._sleep = lambda x: None
+                try:
+                    tt = await supf.handle("open zzzqqq")
+                finally:
+                    T._sleep = orig_sl
+                check("taint: handle() clears a stale flag, and the intent app_search fallback is allowed",
+                      not tbf.tainted and any(c["tool"] == "computer" and c["ok"] for c in tt.tool_calls), str(tt.tool_calls))
+                supf.close()
+            finally:
+                T._ydotool, T._start_ydotoold, T._socket_exists = o2
+    finally:
+        T.httpx.AsyncClient, T._gdbus, T._spawn, T._asleep, T._clock, T._resolve_public, cfg.memory_dir, cfg.desktop, cfg.access, T._APP_DIRS = orig
+        T._desktop_calls.clear(); T._computer_calls.clear(); T._spotify_token.clear()
+        if sup: sup.close()
+
+
 async def test_computer() -> None:
     section("computer (blind ydotool keyboard/mouse) and desktop list_apps (backend mocked; no real input)")
     import dataclasses
@@ -1420,10 +1612,12 @@ async def test_desktop_intents() -> None:
         "next song": med("next"), "skip track": med("next"), "previous song": med("previous"), "last song": med("previous"),
         "play spotify": [spot, play], "open spotify": [spot, play], "play a song on spotify": [spot, play],
         "play some music on spotify": [spot, play], "Please play music on Spotify!": [spot, play],
-        "play anything by third eye blind on spotify":
-            [spot, {"action": "open_url", "url": "spotify:search:third%20eye%20blind"}],
-        "play yellow by coldplay on spotify":
-            [spot, {"action": "open_url", "url": "spotify:search:yellow%20coldplay"}],
+        "play anything by third eye blind on spotify": [spot, {"action": "play", "query": "third eye blind"}],
+        "play yellow by coldplay on spotify": [spot, {"action": "play", "query": "yellow coldplay"}],
+        "play travis scott": [spot, {"action": "play", "query": "travis scott"}],
+        "play goosebumps by travis scott": [spot, {"action": "play", "query": "goosebumps travis scott"}],
+        "play some taylor swift": [spot, {"action": "play", "query": "taylor swift"}],
+        "play a song": [spot, play],
         "open firefox": [{"action": "open_app", "name": "firefox"}],
         "launch visual studio": [{"action": "open_app", "name": "visual studio"}],
         "open youtube.com": [{"action": "open_url", "url": "https://youtube.com"}],
@@ -1434,7 +1628,9 @@ async def test_desktop_intents() -> None:
           str([(k, P(k)) for k in bad]))
     neg = ["how do I open spotify", "open spotify and write a report", "open the file report.txt", "play the guitar",
            "what time is it", "open a new bank account", "open spotify, then write a report", "open the door",
-           "play x and then delete it on spotify", "open notes.txt", "start a python script"]
+           "play x and then delete it on spotify", "open notes.txt", "start a python script",
+           "play chess", "play the piano", "play a game", "play with fire", "play video games", "how do I play music",
+           "play spotify and write a report", "play notes.txt"]
     leaked = [n for n in neg if P(n) is not None]
     check("intent parser: questions, extra clauses, files and chit-chat fall through to None", not leaked, str(leaked))
 
@@ -1491,7 +1687,7 @@ async def test_desktop_intents() -> None:
                   and "Playing" not in t.answer, str((t.answer, len(t.tool_calls))))
             # search page
             t = fresh(); T._gdbus = gd; bus["fail_play"] = 0
-            await sup._run_desktop_intent(t, P("play anything by third eye blind on spotify"))
+            await sup._run_desktop_intent(t, [spot, {"action": "open_url", "url": "spotify:search:third%20eye%20blind"}])
             check("intent: song request opens the search page and says it did not start playback",
                   t.tool_calls[-1]["args"]["url"] == "spotify:search:third%20eye%20blind" and t.score > 0
                   and ["xdg-open", "spotify:search:third%20eye%20blind"] in spawned
@@ -1601,6 +1797,7 @@ async def main_async() -> int:
     await test_desktop()
     await test_desktop_intents()
     await test_computer()
+    await test_spotify_play()
     await test_playbooks()
     await test_voice()
     test_policy()
