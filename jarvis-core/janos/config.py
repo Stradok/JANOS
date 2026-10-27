@@ -64,6 +64,7 @@ class Config:
 
     # --- Tools ---
     allow_shell: bool = True
+    access: str = "safe"        # "safe" (hardened default) or "full" (owner opt-in: real shell/home/files); anything else = safe
     sandbox: bool = True        # run shell / run_python / smoke tests inside bubblewrap
     shell_network: bool = False # let the sandboxed shell reach the network and localhost
     desktop: bool = True        # the `desktop` tool: open apps/URLs and control media outside the sandbox
@@ -73,6 +74,8 @@ class Config:
     employee_cli: str = ""      # coding CLI binary; empty = auto-detect OpenCode
     employee_model: str = "opencode/deepseek-v4.1-flash-free"
     employee_timeout: int = 900 # seconds for the coding step
+    employee_backend: str = "opencode"  # "opencode" or "claude" (the Claude Code CLI; needs access=full)
+    employee_budget_usd: float = 1.0    # --max-budget-usd for the claude backend
 
     # --- Voice & persona (janos.voice, janos.persona) ---
     persona: str = "jarvis"         # active persona: jarvis | ultron (see janos/persona.py)
@@ -85,15 +88,18 @@ class Config:
     brave_api_key: str = ""
 
     def __post_init__(self) -> None:
-        for f in ("model", "ollama_url", "persona", "keep_alive", "employee_cli", "employee_model", "desktop_hosts"):
+        for f in ("model", "ollama_url", "persona", "keep_alive", "employee_cli", "employee_model", "desktop_hosts",
+                  "access", "employee_backend"):
             setattr(self, f, _env(f, getattr(self, f)))
         for f in ("timeout", "num_ctx", "max_steps", "max_heal_attempts",
                   "agent_max_turns", "recall_k", "lesson_k", "shell_timeout", "employee_timeout"):
             setattr(self, f, _env(f, getattr(self, f)))
-        for f in ("temperature", "min_pass_score", "wake_threshold", "rl_explore", "rl_explore_auto"):
+        for f in ("temperature", "employee_budget_usd", "min_pass_score", "wake_threshold", "rl_explore", "rl_explore_auto"):
             setattr(self, f, _env(f, getattr(self, f)))
         for f in ("learn", "allow_shell", "sandbox", "shell_network", "desktop", "rl_policy", "fast_verify"):
             setattr(self, f, _env(f, getattr(self, f)))
+
+        self.access = "full" if self.access == "full" else "safe"   # fail closed
 
         key = os.environ.get("JANOS_BRAVE_API_KEY") or os.environ.get("BRAVE_API_KEY") or ""
         if not key and (ROOT / ".brave_key").exists():
@@ -107,6 +113,10 @@ class Config:
         self.workspace = Path(_env("workspace", self.workspace))
         self.memory_dir.mkdir(parents=True, exist_ok=True)
         self.workspace.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def full_access(self) -> bool:
+        return self.access == "full"
 
     @property
     def db_path(self) -> Path:

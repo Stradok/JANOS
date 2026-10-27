@@ -79,7 +79,7 @@ def prefix(config: Config, profile: str, *, network: bool = False,
 
     `workdir` replaces the workspace as the one writable, current directory.
     """
-    if not active(config):
+    if profile == "full" or not active(config):   # "full": owner opted out of the sandbox (access=full)
         return []
     ws = str((workdir or config.workspace).resolve())
 
@@ -135,6 +135,8 @@ def prefix(config: Config, profile: str, *, network: bool = False,
 
 
 def describe(config: Config) -> str:
+    if config.full_access:
+        return "OFF (access: full)"
     if not config.sandbox:
         return "off (sandbox: false in config)"
     return "bubblewrap" if available() else "unavailable — bwrap missing, tools run unsandboxed"

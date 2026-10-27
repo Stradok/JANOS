@@ -1133,6 +1133,118 @@ async def test_employee_offline() -> None:
     shutil.rmtree(repo.parent, ignore_errors=True)
 
 
+async def test_full_access() -> None:
+    import dataclasses
+    from janos import employee as E, sandbox, tools as T
+    section("Full-access mode and routing (all mocked)")
+    keep = os.environ.get("JANOS_ACCESS")
+    try:
+        os.environ.pop("JANOS_ACCESS", None)
+        d = Config.load().access
+        os.environ["JANOS_ACCESS"] = "full"
+        f = Config.load().full_access
+        os.environ["JANOS_ACCESS"] = "FULL ; rm"
+        g = Config.load().full_access
+    finally:
+        os.environ.pop("JANOS_ACCESS", None)
+        if keep is not None:
+            os.environ["JANOS_ACCESS"] = keep
+    check("access: default safe, 'full' enables, garbage fails closed", d == "safe" and f and not g, f"{d} {f} {g}")
+
+    # write policy
+    home = Path(tempfile.mkdtemp()).resolve()
+    ws = home / "ws"
+    ins = T._INSTALL
+    check("safe write policy unchanged",
+          not T._write_allowed(home / "Desktop/x.txt", ws, home) and T._write_allowed(home / "Documents/x", ws, home))
+    check("full write policy allows home files, refuses JANOS code and venv",
+          T._write_allowed(home / "Desktop/x.txt", ws, home, True) and T._write_allowed(home / ".bashrc", ws, home, True)
+          and not T._write_allowed(ins / "janos/x.py", ws, home, True) and not T._write_allowed(ins / ".venv/x", ws, home, True))
+
+    # desktop dirs and open_url
+    check("user app dirs only in full",
+          not any(".local" in str(p) for p in T._app_dirs(False))
+          and sum(".local" in str(p) for p in T._app_dirs(True)) == 2)
+    cfg = dataclasses.replace(Config.load(), access="full", desktop=True)
+    tb = Toolbox(cfg)
+    spawned: list = []
+    orig = (T._spawn, T._resolve_public, T._clock)
+    T._spawn = lambda argv, env_extra=None: spawned.append(list(argv)) or ""
+    async def pub(host):
+        import ipaddress
+        try:
+            return ("", "internal") if T._bad_ip(ipaddress.ip_address(host.strip("[]"))) else (host, "")
+        except ValueError:
+            return "93.184.216.34", ""
+    T._resolve_public = pub
+    T._desktop_calls.clear()
+    clock = [5000.0]
+    T._clock = lambda: clock[0]
+    try:
+        run = lambda **kw: tb.run("desktop", kw)
+        ok = await run(action="open_url", url="https://example.com/page")
+        bad = [await run(action="open_url", url=u) for u in
+               ("http://127.0.0.1/", "file:///etc/passwd", "https://u:p@example.com/")]
+        check("full open_url allows any public https host, still refuses loopback/file/credentials",
+              ok.ok and spawned == [["xdg-open", "https://example.com/page"]] and not any(r.ok for r in bad),
+              str([ok.output] + [r.output for r in bad]))
+        check("full rate limit is 20/min", all([(await run(action="open_url", url=f"https://example.com/{i}")).ok for i in range(16)])
+              and not (await run(action="open_url", url="https://example.com/z")).ok)
+    finally:
+        T._spawn, T._resolve_public, T._clock = orig
+        T._desktop_calls.clear()
+
+    env = T._scrub_env({"ANTHROPIC_API_KEY": "a", "GITHUB_TOKEN": "b", "FOO_SECRET": "c", "HOME": "/h", "PATH": "/p"})
+    check("secret env vars are stripped", env == {"HOME": "/h", "PATH": "/p"}, str(env))
+    check("full profile builds no bwrap prefix even when sandbox is active",
+          sandbox.prefix(cfg, "full") == [] and sandbox.prefix(Config.load(), "observe") != [] or not sandbox.available())
+    r = await tb.run("shell", {"command": "echo hi-full"})
+    check("full shell runs plain (no sandbox)", r.ok and "hi-full" in r.output, r.output)
+
+    # claude backend
+    ccfg = dataclasses.replace(Config.load(), access="full", employee_backend="claude", employee_budget_usd=1.0)
+    grepo = _git_repo({"README": "x\n"})
+    emp = E.Employee(ccfg, grepo)
+    seen: list = []
+    async def fake_exec(argv, timeout, cwd=None, env=None):
+        seen.append((argv, cwd))
+        return 0, "ok"
+    real = E._exec
+    E._exec = fake_exec
+    try:
+        wt = Path(tempfile.mkdtemp())
+        await emp._agent("/x/claude", wt, "do x", "", 5)
+        await emp._agent("/x/claude", wt, "review", "", 5, plan=True)
+    finally:
+        E._exec = real
+    check("claude argv exact, cwd is the worktree",
+          seen[0] == (["/x/claude", "-p", "do x", "--permission-mode", "acceptEdits", "--max-budget-usd", "1.0",
+                       "--output-format", "text"], wt) and seen[1][0][4] == "plan", str(seen))
+    safe = dataclasses.replace(ccfg, access="safe")
+    rr = await E.Employee(safe, grepo).run("t")
+    check("claude backend refuses unless access=full", "access: full" in rr.error or "not found" in rr.error, rr.error)
+
+    shutil.rmtree(grepo.parent, ignore_errors=True)
+
+    # routing
+    sup = Supervisor(Config.load())
+    try:
+        task = "play a song on spotify"
+        plan = sup._repair_plan(task, [{"step": "look around", "agent": "operator"}])
+        check("must-call: desktop gets a dedicated first operator step even if operator is planned",
+              plan[0]["agent"] == "operator" and "desktop" in plan[0]["step"], str(plan))
+        again = sup._repair_plan(task, [{"step": "Call desktop open_app", "agent": "operator"}])
+        check("must-call: no duplicate when a step already names the tool", len(again) == 1, str(again))
+        none = sup._repair_plan("what time is it", [{"step": "x", "agent": "operator"}])
+        check("must-call: unrelated requests untouched", len(none) == 1 and sup._uncalled_must("what time is it", []) == [])
+        v = await sup._verify(task, "Open Spotify and press play.", [], [{"tool": "shell", "ok": True}])
+        good = await sup._verify(task, "Opened Spotify.", [], [{"tool": "desktop", "ok": True}])
+        check("verify rejects a run that never called desktop, accepts one that did",
+              not v["ok"] and "`desktop`" in v["fix"] and good["ok"], str((v, good)))
+    finally:
+        sup.close()
+
+
 async def test_employee_live() -> None:
     section("Employee (live OpenCode)")
     if not SNAP_BIN.exists() and not shutil.which("opencode"):
@@ -1176,6 +1288,7 @@ async def main_async() -> int:
     await test_voice()
     test_policy()
     await test_employee_offline()
+    await test_full_access()
     await test_employee_git_hijack()
     await test_worker_sandbox()
     await test_persona_and_launcher()

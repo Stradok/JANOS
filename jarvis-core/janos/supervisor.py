@@ -315,8 +315,9 @@ class Supervisor:
 
         self.toolbox.add(Tool(
             name="delegate_coding",
-            description=("Have a sandboxed coding agent (OpenCode) do one coding task on its own git "
-                         "branch, run tests and review it. Never merges; the human merges."),
+            description=("Write code: have the coding employee (OpenCode, or Claude Code when configured) do "
+                         "one coding task on its own git branch, run tests and review it. Use this "
+                         "whenever the request is to write or change code. Never merges; the human merges."),
             params={"task": "str: the coding task", "repo": "str: optional git repo path",
                     "test_cmd": "str: optional command that must pass"},
             run=delegate_coding,
@@ -349,6 +350,7 @@ class Supervisor:
             "playbooks": self.playbooks.names(),
             "memory": self.memory.stats(),
             "sandbox": sandbox.describe(self.config),
+            "access": self.config.access,
             "policy": self.policy.stats() if self.policy else "off",
             "config": {"model": self.config.model, "max_steps": self.config.max_steps,
                        "max_heal_attempts": self.config.max_heal_attempts},
@@ -525,11 +527,21 @@ Request: {task}
         "system_info": "Inspect this machine and report the real CPU, RAM, disk and GPU figures.",
         "web_search": "Search the web for the information this request needs.",
         "write_file": "Write the result to the file named in the request.",
-        "desktop": "Call the desktop tool to do what the request asks (open_app, open_url or media), "
-                   "then report only what it actually returned.",
+        "desktop": "Call the desktop tool now; do not answer with instructions. To play music: "
+                   "desktop(action=open_app, name=spotify), then desktop(action=media, command=play). "
+                   "To open a site: desktop(action=open_url, url=...). For a specific song, open_url "
+                   "spotify:search:<query>. Report only what it returned; say playing only if "
+                   "desktop(action=media, command=status) confirms.",
         "create_tool": "Call the create_tool tool to build the tool this request asks for, "
                        "then call the tool it returns to prove it works.",
     }
+
+    _MUST_CALL = {"desktop"}   # tools whose request is only met by actually calling them
+
+    def _uncalled_must(self, task: str, tool_calls: list[dict[str, Any]] | None) -> list[str]:
+        """Must-call tools the request needs that never succeeded in the tool log."""
+        ok = {c.get("tool") for c in (tool_calls or []) if c.get("ok")}
+        return sorted((self._required_tools(task) & self._MUST_CALL) - ok)
 
     def _repair_plan(self, task: str, steps: list[dict[str, str]]) -> list[dict[str, str]]:
         """Guarantee the plan can actually reach the tools the request needs.
@@ -547,6 +559,13 @@ Request: {task}
             agent = self.runner.agents.get(s["agent"])
             if agent:
                 covered |= set(agent.tools)
+
+        # Owning the tool is not calling it: a must-call tool gets its own first
+        # step even when its owner is already planned (unless a step names it).
+        for tool in sorted(needed & self._MUST_CALL & covered):
+            owner = self._owner_of(tool)
+            if owner and not any(s["agent"] == owner and tool in s["step"].lower() for s in steps):
+                steps = [{"step": self._STEP_TEXT[tool], "agent": owner}] + steps
 
         for tool in sorted(needed - covered):
             owner = self._owner_of(tool)
@@ -688,6 +707,7 @@ Rules:
         # matters of opinion, so both are settled before the model is consulted.
         bad_maths = check_arithmetic(answer)
         missing = self._missing_files(task)
+        uncalled = self._uncalled_must(task, tool_calls)
 
         # Side effects live in the tool log, not the prose. Without this the
         # reviewer marks "write it to specs.md" unmet even when the file exists.
@@ -704,7 +724,7 @@ Rules:
         # this, and its call plus any heal retry are most of the latency — so
         # accept directly. Knowledge-only answers (no tool) and anything with a
         # maths, file or execution problem still go to the critic below.
-        if (self.config.fast_verify and not bad_maths and not missing and not errors
+        if (self.config.fast_verify and not bad_maths and not missing and not uncalled and not errors
                 and tool_calls and all(c.get("ok") for c in tool_calls)):
             return {"score": 0.9, "ok": True, "issues": [], "fix": "", "fast": True}
 
@@ -759,7 +779,8 @@ concretely what to do differently. Never return a failing score with no issues.
         except LLMError:
             # Reviewer unavailable: don't block the answer, but don't trust it
             # either — and the arithmetic check still stands on its own.
-            hard = bad_maths + [f"{f} was never created" for f in missing]
+            hard = (bad_maths + [f"{f} was never created" for f in missing]
+                    + [f"{t} was never called successfully" for t in uncalled])
             return {
                 "score": 0.3 if hard else 0.5,
                 "ok": not hard,
@@ -788,12 +809,19 @@ concretely what to do differently. Never return a failing score with no issues.
             fix = (f"The file {names} was never created. Call write_file with the full "
                    f"content and the exact filename. Do not claim it is saved otherwise.")
 
+        if uncalled:
+            names = ", ".join(uncalled)
+            issues = [f"required tool {names} was never called successfully"] + issues
+            score = min(score, 0.3)
+            fix = (f"You must call the `{uncalled[0]}` tool; do not answer with instructions. "
+                   f"Never claim it was done unless it returned success.")
+
         return {
             "score": score,
             # Derived from the score rather than the model's own `ok` flag: it
             # regularly returns score 0.7 alongside ok=false, and honouring that
             # contradiction spends two more executions to no purpose.
-            "ok": (score >= self.config.min_pass_score and not bad_maths and not missing),
+            "ok": (score >= self.config.min_pass_score and not bad_maths and not missing and not uncalled),
             "issues": issues,
             "fix": fix,
         }

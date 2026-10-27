@@ -134,9 +134,14 @@ class Employee:
     def _binary(self) -> str | None:
         if self.config.employee_cli:
             return self.config.employee_cli
+        if self.config.employee_backend == "claude":
+            return shutil.which("claude")
         if SNAP_BIN.exists():
             return str(SNAP_BIN)
         return shutil.which("opencode")
+
+    def _is_claude(self, binary: str) -> bool:
+        return self.config.employee_backend == "claude" or Path(binary).name == "claude"
 
     def _sbx_git(self, cwd: Path, *args: str, timeout: float = 120):
         """Run hardened git inside the isolated sandbox (no network, home hidden).
@@ -168,6 +173,12 @@ class Employee:
 
     async def _agent(self, binary: str, path: Path, prompt: str, model: str,
                      timeout: int, plan: bool = False) -> tuple[int, str]:
+        if self._is_claude(binary):
+            # Unsandboxed (access=full only, checked in run()); the worktree is the cwd.
+            # ponytail: no bwrap for claude; it needs a writable ~/.claude, add a worker profile if wanted.
+            return await _exec([binary, "-p", prompt, "--permission-mode", "plan" if plan else "acceptEdits",
+                                "--max-budget-usd", str(self.config.employee_budget_usd),
+                                "--output-format", "text"], timeout, cwd=path)
         home = Path.home()
         # Private state: the agent never writes the user's own OpenCode sessions,
         # caches or credentials, so nothing it does persists into the user's tools.
@@ -198,6 +209,9 @@ class Employee:
             if not binary or not Path(binary).exists():
                 r.error = "coding CLI not found"
                 return r
+            if self._is_claude(binary) and not self.config.full_access:
+                r.error = "the claude backend runs unsandboxed and needs access: full"
+                return r
             unsafe = await _repo_is_safe(self.repo)
             if unsafe:
                 r.error = f"refusing repo: {unsafe}"
@@ -221,7 +235,8 @@ class Employee:
                      + "do not commit; finish with a 2-3 sentence summary of what you changed.")
             code, out = await self._agent(binary, path, task + rules, model,
                                           timeout or self.config.employee_timeout)
-            r.summary, r.tokens, r.cost, _ = parse_events(out)
+            parse = (lambda o: (o.strip()[-1500:], 0, 0.0, 0)) if self._is_claude(binary) else parse_events
+            r.summary, r.tokens, r.cost, _ = parse(out)
             if code:
                 r.error = "coding step timed out" if code == -9 else f"coding step exited {code}: {out[-300:]}"
 
@@ -247,7 +262,7 @@ class Employee:
                       "reasons, then a final line that is exactly VERDICT: APPROVE or VERDICT: REJECT."
                       f"\n\n{diff[:20000]}")
             _, rout = await self._agent(binary, path, prompt, model, 600, plan=True)
-            r.review, tok, cost, _ = parse_events(rout)
+            r.review, tok, cost, _ = parse(rout)
             r.tokens += tok
             r.cost += cost
             verdicts = re.findall(r"VERDICT:\s*(APPROVE|REJECT)", r.review)

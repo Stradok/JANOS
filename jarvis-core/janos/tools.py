@@ -268,7 +268,21 @@ _URL_SCHEMES = ("http", "https", "spotify")
 _REDIRECT_PATHS = ("/redirect", "/url", "/out", "/away", "/r/", "/link", "/goto", "/l/")
 _MEDIA = {"play": "Play", "pause": "Pause", "play_pause": "PlayPause",
           "next": "Next", "previous": "Previous"}
-_RATE_MAX, _RATE_WINDOW = 6, 60.0
+_RATE_MAX, _RATE_MAX_FULL, _RATE_WINDOW = 6, 20, 60.0
+_USER_APP_DIRS = (".local/share/applications", ".local/share/flatpak/exports/share/applications")
+
+
+def _app_dirs(full: bool = False) -> list[Path]:
+    """Trusted .desktop dirs. access=full adds the user-writable ones (owner's choice)."""
+    return _APP_DIRS + ([Path.home() / d for d in _USER_APP_DIRS] if full else [])
+
+
+_SECRET_NAME = re.compile(r"(KEY|TOKEN|SECRET)$", re.I)
+
+
+def _scrub_env(env: dict[str, str]) -> dict[str, str]:
+    """Drop secret-looking variables before handing the server's environment to a child."""
+    return {k: v for k, v in env.items() if not _SECRET_NAME.search(k)}
 _desktop_calls: deque[float] = deque()
 _clock = time.monotonic   # tests replace this
 _ENV_KEEP = ("HOME", "PATH", "DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY",
@@ -282,11 +296,11 @@ def _gui_env() -> dict[str, str]:
     return env
 
 
-def _desktop_rate_ok() -> bool:
+def _desktop_rate_ok(limit: int = _RATE_MAX) -> bool:
     now = _clock()
     while _desktop_calls and now - _desktop_calls[0] > _RATE_WINDOW:
         _desktop_calls.popleft()
-    if len(_desktop_calls) >= _RATE_MAX:
+    if len(_desktop_calls) >= limit:
         return False
     _desktop_calls.append(now)
     return True
@@ -310,10 +324,12 @@ def _spawn(argv: list[str], env_extra: dict[str, str] | None = None) -> str:
 _INSTALL = Path(__file__).resolve().parents[1]   # repo root holding janos/ and .venv
 
 
-def _write_allowed(t: Path, ws: Path, home: Path) -> bool:
-    """write_file policy: workspace, ~/Documents, ~/Downloads; never JANOS's own code or venv."""
+def _write_allowed(t: Path, ws: Path, home: Path, full: bool = False) -> bool:
+    """write_file policy: workspace, ~/Documents, ~/Downloads (anywhere in full mode); never JANOS's own code or venv."""
     if t.is_relative_to(_INSTALL / "janos") or t.is_relative_to(_INSTALL / ".venv"):
         return False
+    if full:
+        return True
     return any(t.is_relative_to(r) for r in (ws, (home / "Documents").resolve(), (home / "Downloads").resolve()))
 
 
@@ -330,10 +346,10 @@ def _gdbus(args: list[str]) -> tuple[int, str]:
 _empty_xdg: list[str] = []   # one cached empty XDG_DATA_HOME for the gtk-launch fallback
 
 
-def _launch_argv(app: str, path: Path) -> tuple[list[str], dict[str, str] | None]:
+def _launch_argv(app: str, path: Path, full: bool = False) -> tuple[list[str], dict[str, str] | None]:
     """Launch exactly the validated file; gtk-launch re-resolves the id and would prefer ~/.local/share."""
     path = path.resolve()
-    if not any(path.parent == d.resolve() for d in _APP_DIRS):
+    if not any(path.parent == d.resolve() for d in _app_dirs(full)):
         raise DesktopError(f"Refused: {path} is not in a trusted applications directory.")
     if shutil.which("gio"):
         return ["gio", "launch", str(path)], None
@@ -343,10 +359,10 @@ def _launch_argv(app: str, path: Path) -> tuple[list[str], dict[str, str] | None
             "XDG_DATA_DIRS": "/usr/share:/var/lib/snapd/desktop:/var/lib/flatpak/exports/share"}
 
 
-def _desktop_entries() -> dict[str, tuple[str, Path]]:
+def _desktop_entries(full: bool = False) -> dict[str, tuple[str, Path]]:
     """{desktop-id: (Name, file)} for launchable apps. The first directory to define an id wins."""
     out: dict[str, tuple[str, Path]] = {}
-    for d in _APP_DIRS:
+    for d in _app_dirs(full):
         for f in sorted(d.glob("*.desktop")):
             if f.stem.startswith("-") or f.stem in out:
                 continue
@@ -365,12 +381,12 @@ def _desktop_entries() -> dict[str, tuple[str, Path]]:
     return out
 
 
-def _find_app(name: str) -> str:
+def _find_app(name: str, full: bool = False) -> str:
     """Resolve a user-facing app name to exactly one desktop id, or raise with candidates."""
     q = name.strip().lower()
     if not re.fullmatch(r"\w[\w .+&'-]{0,63}", q):
         raise DesktopError(f"Refused: {name!r} is not a valid app name.")
-    entries = _desktop_entries()
+    entries = _desktop_entries(full)
     exact = [i for i, n in entries.items() if q in (i.lower(), n[0].lower())]
     hits = exact or [i for i, n in entries.items() if q in i.lower() or q in n[0].lower()]
     if not hits:
@@ -721,14 +737,15 @@ class Toolbox:
             ws = cfg.workspace.resolve()
             home = Path.home().resolve()
             # Allowlist: workspace, ~/Documents, ~/Downloads. Never JANOS's own code or venv.
-            ok = lambda t: _write_allowed(t, ws, home)
+            ok = lambda t: _write_allowed(t, ws, home, cfg.full_access)
             try:
                 target = p.resolve()
             except OSError:
                 target = p
             if not ok(target):
                 return (f"Refused: {target} is not an allowed write location. Allowed: the workspace "
-                        f"{ws}, {home / 'Documents'}, {home / 'Downloads'}. "
+                        f"{ws}, {home / 'Documents'}, {home / 'Downloads'}"
+                        f"{' (set access: full to write elsewhere)' if not cfg.full_access else ' (not JANOS own code)'}. "
                         f"Use a bare filename to write into {ws}.")
             fd = -1
             try:
@@ -787,9 +804,9 @@ class Toolbox:
                 return "Error: code is required."
             try:
                 proc = await asyncio.create_subprocess_exec(
-                    *sandbox.prefix(cfg, "isolated"), sys.executable, "-c", textwrap.dedent(code),
+                    *sandbox.prefix(cfg, "full" if cfg.full_access else "isolated"), sys.executable, "-c", textwrap.dedent(code),
                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
-                    cwd=str(cfg.workspace),
+                    cwd=str(cfg.workspace), env=_scrub_env(dict(os.environ)) if cfg.full_access else None,
                 )
                 out, _ = await asyncio.wait_for(proc.communicate(), timeout=min(timeout, 60))
             except asyncio.TimeoutError:
@@ -819,9 +836,9 @@ class Toolbox:
                 # Models reach for bash-isms (echo -e, [[ ]], pipefail);
                 # /bin/sh would emit them literally instead of running them.
                 proc = await asyncio.create_subprocess_exec(
-                    *sandbox.prefix(cfg, "observe"), shutil.which("bash") or "/bin/sh", "-c", command,
+                    *sandbox.prefix(cfg, "full" if cfg.full_access else "observe"), shutil.which("bash") or "/bin/sh", "-c", command,
                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
-                    cwd=str(cfg.workspace),
+                    cwd=str(cfg.workspace), env=_scrub_env(dict(os.environ)) if cfg.full_access else None,
                 )
                 out, _ = await asyncio.wait_for(proc.communicate(), timeout=limit)
             except asyncio.TimeoutError:
@@ -935,13 +952,15 @@ class Toolbox:
             action = action.strip().lower()
             if action not in ("open_app", "open_url", "media"):
                 raise DesktopError("action must be open_app, open_url or media.")
-            if not _desktop_rate_ok():
-                raise DesktopError(f"Refused: more than {_RATE_MAX} desktop actions in a minute. Wait and stop repeating.")
+            full = cfg.full_access
+            limit = _RATE_MAX_FULL if full else _RATE_MAX
+            if not _desktop_rate_ok(limit):
+                raise DesktopError(f"Refused: more than {limit} desktop actions in a minute. Wait and stop repeating.")
             if action == "media":
                 return await asyncio.to_thread(_media, command.strip().lower())
             if action == "open_app":
-                app = _find_app(name)
-                argv, env_extra = _launch_argv(app, _desktop_entries()[app][1])
+                app = _find_app(name, full)
+                argv, env_extra = _launch_argv(app, _desktop_entries(full)[app][1], full)
                 done = f"Launched {app} ({' '.join(argv[:2])})."
             else:
                 env_extra = None
@@ -957,12 +976,12 @@ class Toolbox:
                         raise DesktopError("Refused: URL needs a host and no embedded credentials.")
                     host = u.hostname.lower().rstrip(".")
                     allowed = [d.strip().lower() for d in cfg.desktop_hosts.split(",") if d.strip()]
-                    if not any(host == d or host.endswith("." + d) for d in allowed):
+                    if not full and not any(host == d or host.endswith("." + d) for d in allowed):
                         raise DesktopError(f"Refused: {host} is not on the allowed host list "
                                            f"(config desktop_hosts / JANOS_DESKTOP_HOSTS: {', '.join(allowed) or 'empty'}).")
                     # Best effort only: allowlisted sites may have other open redirects, which is
                     # why the allowlist stays small. This catches the common redirect shapes.
-                    if (re.search(r"https?://|//", u.fragment)
+                    if not full and (re.search(r"https?://|//", u.fragment)
                             or any(re.search(r"https?://|//", v) for _, v in parse_qsl(u.query))
                             or u.path.lower().startswith(_REDIRECT_PATHS)):
                         raise DesktopError(f"Refused: URL on {host} looks like a redirect to another site.")
@@ -991,7 +1010,7 @@ class Toolbox:
              {"path": "str='.'"}, list_dir, False),
             ("calculate", "Evaluate an arithmetic expression exactly.",
              {"expression": "str"}, calculate, False),
-            ("run_python", "Run a short Python script and capture its stdout. Sandboxed: no network, only the workspace is visible.",
+            ("run_python", "Run a short Python script and capture its stdout. Sandboxed (unless access=full): no network, only the workspace is visible.",
              {"code": "str", "timeout": "int=20"}, run_python, True),
             ("shell", "Run a shell command on this Linux machine. Sandboxed: processes, disks and GPU are visible; only the workspace is writable; home folder hidden; no network (use web_search / web_fetch).",
              {"command": "str", "timeout": "int"}, shell, True),
