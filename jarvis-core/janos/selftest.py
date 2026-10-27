@@ -485,7 +485,8 @@ async def test_desktop() -> None:
     tb = Toolbox(cfg)
     spawned: list[list[str]] = []
     orig = (T._spawn, T._APP_DIRS, T._resolve_public, T._clock, T._gdbus)
-    T._spawn = lambda argv: spawned.append(list(argv)) or ""
+    spawn_env: list = []
+    T._spawn = lambda argv, env_extra=None: spawned.append(list(argv)) or spawn_env.append(env_extra) or ""
     async def fake_resolve(host: str) -> tuple[str, str]:
         import ipaddress
         try:
@@ -539,6 +540,18 @@ async def test_desktop() -> None:
         check("desktop_hosts is whitespace/case tolerant; empty refuses http(s) but not spotify",
               r_custom.ok and not r_empty.ok and r_spot.ok, f"{r_custom.output} | {r_empty.output} | {r_spot.output}")
 
+        # open_url redirect heuristics (best effort)
+        spawned.clear(); now[0] += 61
+        rb = [await run(action="open_url", url=u) for u in (
+            "https://www.youtube.com/redirect?q=https://evil.com",
+            "https://www.youtube.com/watch?v=a&next=//evil.com",
+            "https://www.youtube.com/watch?v=a#https://evil.com")]
+        ra = [await run(action="open_url", url=u) for u in (
+            "https://www.youtube.com/watch?v=abc", "https://github.com/user/repo")]
+        check("open_url refuses redirect-shaped URLs on allowed hosts, allows normal ones",
+              all(not r.ok and "looks like a redirect" in r.output for r in rb) and all(r.ok for r in ra) and len(spawned) == 2,
+              str([r.output[:60] for r in rb + ra]))
+
         # open_app
         spawned.clear()
         now[0] += 61
@@ -547,9 +560,39 @@ async def test_desktop() -> None:
                 (Path(tmp) / f"{stem}.desktop").write_text(f"[Desktop Entry]\nType=Application\nName={name}\nExec=true\n")
             (Path(tmp) / "hidden.desktop").write_text("[Desktop Entry]\nType=Application\nName=Ghost\nNoDisplay=true\n")
             T._APP_DIRS = [Path(tmp)]
-            r = await run(action="open_app", name="spotify")
-            check("open_app resolves an exact name to gtk-launch argv",
-                  r.ok and spawned == [["gtk-launch", "spotify_spotify"]], f"{r.output} {spawned}")
+            real_which = T.shutil.which
+            T.shutil.which = lambda c, *a, **k: "/usr/bin/gio" if c == "gio" else real_which(c, *a, **k)
+            try:
+                r = await run(action="open_app", name="spotify")
+                want = ["gio", "launch", str((Path(tmp) / "spotify_spotify.desktop").resolve())]
+                check("open_app launches the validated file via gio (abs path under _APP_DIRS)",
+                      r.ok and spawned == [want] and spawn_env[-1] is None, f"{r.output} {spawned}")
+                spawned.clear(); now[0] += 61
+                T.shutil.which = lambda c, *a, **k: None if c == "gio" else real_which(c, *a, **k)
+                r = await run(action="open_app", name="spotify")
+                env = spawn_env[-1] or {}
+                check("open_app without gio: gtk-launch with empty XDG_DATA_HOME and root-only XDG_DATA_DIRS",
+                      r.ok and spawned == [["gtk-launch", "spotify_spotify"]]
+                      and Path(env.get("XDG_DATA_HOME", "x")).is_dir() and not list(Path(env["XDG_DATA_HOME"]).iterdir())
+                      and env.get("XDG_DATA_DIRS") == "/usr/share:/var/lib/snapd/desktop:/var/lib/flatpak/exports/share",
+                      f"{r.output} {spawned} {env}")
+                # a same-id file planted in a user dir is not in _APP_DIRS, so never consulted
+                with tempfile.TemporaryDirectory() as usr:
+                    (Path(usr) / "spotify_spotify.desktop").write_text("[Desktop Entry]\nType=Application\nName=Evil\nExec=true\n")
+                    T.shutil.which = lambda c, *a, **k: "/usr/bin/gio" if c == "gio" else real_which(c, *a, **k)
+                    spawned.clear(); now[0] += 61
+                    await run(action="open_app", name="spotify")
+                    check("open_app never uses a planted user-dir desktop file",
+                          spawned and str(Path(tmp).resolve()) in spawned[0][-1] and usr not in spawned[0][-1], str(spawned))
+                spawned.clear(); now[0] += 61
+                try:
+                    T._launch_argv("x", Path(tmp).parent / "x.desktop")
+                    outside = False
+                except T.DesktopError:
+                    outside = True
+                check("launch refuses a path outside _APP_DIRS", outside)
+            finally:
+                T.shutil.which = real_which
             spawned.clear()
             r = await run(action="open_app", name="foo")
             check("open_app refuses ambiguity and lists candidates",
@@ -571,26 +614,61 @@ async def test_desktop() -> None:
             try:
                 cfg.workspace = hm / "Desktop" / "ws"
                 cfg.workspace.mkdir(parents=True)
-                refused = [".local/share/applications/x.desktop", ".bashrc",
-                           ".config/autostart/x.desktop", ".ssh/authorized_keys"]
-                outs = [await tb.run("write_file", {"path": str(hm / r), "content": "x"}) for r in refused]
-                check("write_file refuses hidden files and dirs in home",
-                      all("Refused" in o.output for o in outs) and not any((hm / r).exists() for r in refused),
-                      str([o.output[:60] for o in outs]))
-                outs = [await tb.run("write_file", {"path": str(hm / ".config" / "x"), "content": "x"}) ,
-                        await tb.run("write_file", {"path": str(cfg.workspace / ".." / ".." / ".bashrc"), "content": "x"})]
-                check("write_file hidden check survives .. traversal", all("Refused" in o.output for o in outs),
-                      str([o.output[:60] for o in outs]))
-                r_doc = await tb.run("write_file", {"path": str(hm / "Documents" / "a.txt"), "content": "x"})
-                r_ws = await tb.run("write_file", {"path": "w.txt", "content": "x"})
-                check("write_file still allows non-hidden home files and the workspace",
-                      (hm / "Documents" / "a.txt").exists() and (cfg.workspace / "w.txt").exists(),
-                      f"{r_doc.output} | {r_ws.output}")
-                cfg.workspace = hm / ".janos" / "ws"
-                cfg.workspace.mkdir(parents=True)
-                r_hws = await tb.run("write_file", {"path": "w.txt", "content": "x"})
-                check("write_file allows a workspace that itself sits under a hidden dir",
-                      (cfg.workspace / "w.txt").exists(), r_hws.output)
+                inst = hm / "inst"   # fake install tree; the real repo is never written
+                (inst / "janos").mkdir(parents=True); (inst / ".venv").mkdir()
+                real_inst, T._INSTALL = T._INSTALL, inst
+                (hm / "bin").mkdir(); (hm / "Documents").mkdir(); (hm / "Downloads").mkdir()
+                (hm / ".bashrc").write_text("orig")
+                wr = lambda pth, c="x", **k: tb.run("write_file", {"path": str(pth), "content": c, **k})
+                try:
+                    refused = [hm / "Desktop" / "x.txt", hm / "bin" / "x", hm / ".bashrc", hm / ".ssh" / "k",
+                               inst / "janos" / "evil.py", inst / ".venv" / "x", cfg.workspace / ".." / ".." / ".bashrc",
+                               "/etc/passwd"]
+                    outs = [await wr(r) for r in refused]
+                    check("write_file refuses everything outside workspace/Documents/Downloads and the install tree",
+                          all("Refused" in o.output for o in outs) and (hm / ".bashrc").read_text() == "orig"
+                          and not (inst / "janos" / "evil.py").exists() and not (hm / "bin" / "x").exists(),
+                          str([o.output[:50] for o in outs if "Refused" not in o.output]))
+                    r1, r2, r3 = await wr(hm / "Documents" / "a.txt"), await wr(hm / "Downloads" / "b.txt"), await wr("w.txt")
+                    check("write_file allows workspace, ~/Documents, ~/Downloads",
+                          all(f.exists() for f in (hm / "Documents" / "a.txt", hm / "Downloads" / "b.txt", cfg.workspace / "w.txt")),
+                          f"{r1.output} | {r2.output} | {r3.output}")
+                    await wr("w.txt", "A"); await wr("w.txt", "B", append=True)
+                    check("write_file overwrite and append still work", (cfg.workspace / "w.txt").read_text() == "AB")
+                    (cfg.workspace / "evil").symlink_to(hm / ".bashrc")
+                    (cfg.workspace / "good").symlink_to(hm / "Documents" / "a.txt")
+                    ro, rg = await wr(cfg.workspace / "evil", "pwn"), await wr(cfg.workspace / "good", "ok")
+                    check("write_file follows symlinks only to allowed real paths",
+                          "Refused" in ro.output and (hm / ".bashrc").read_text() == "orig"
+                          and rg.output.startswith("Wrote") and (hm / "Documents" / "a.txt").read_text() == "ok",
+                          f"{ro.output} | {rg.output}")
+                    # race: final component becomes a symlink between resolve and open -> ELOOP, no truncation
+                    (hm / "Documents" / "keep.txt").write_text("keep")
+                    victim = hm / "Documents" / "race.txt"; victim.write_text("precious")
+                    real_open = os.open
+                    def racing_open(pth, flags, mode=0o777, **kw):
+                        if str(pth) == str(victim):
+                            victim.unlink(); victim.symlink_to(hm / ".bashrc")
+                        return real_open(pth, flags, mode, **kw)
+                    os.open = racing_open
+                    try:
+                        rr = await wr(victim, "pwn")
+                    finally:
+                        os.open = real_open
+                    check("write_file symlink race is a refusal-style error, nothing truncated or written",
+                          not rr.output.startswith("Wrote") and (hm / ".bashrc").read_text() == "orig", rr.output)
+                    # same-inode swap: fd re-check refuses and leaves the file untouched
+                    real_rp = os.path.realpath
+                    os.path.realpath = lambda q, *a, **k: str(hm / ".bashrc") if str(q).startswith("/proc/self/fd/") else real_rp(q, *a, **k)
+                    try:
+                        (hm / "Documents" / "t.txt").write_text("intact")
+                        rf = await wr(hm / "Documents" / "t.txt", "pwn")
+                    finally:
+                        os.path.realpath = real_rp
+                    check("write_file fd re-check refuses without truncating",
+                          "Refused" in rf.output and (hm / "Documents" / "t.txt").read_text() == "intact", rf.output)
+                finally:
+                    T._INSTALL = real_inst
             finally:
                 cfg.workspace = real_ws
                 if real_home is None:

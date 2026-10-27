@@ -25,6 +25,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import textwrap
 import time
 from collections import deque
@@ -33,7 +34,7 @@ from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Awaitable, Callable
-from urllib.parse import parse_qs, quote_plus, urlparse
+from urllib.parse import parse_qs, parse_qsl, quote_plus, urlparse
 
 import httpx
 
@@ -264,6 +265,7 @@ _APP_DIRS = [Path(p) for p in (
     "/usr/share/applications", "/var/lib/snapd/desktop/applications",
     "/var/lib/flatpak/exports/share/applications")]
 _URL_SCHEMES = ("http", "https", "spotify")
+_REDIRECT_PATHS = ("/redirect", "/url", "/out", "/away", "/r/", "/link", "/goto", "/l/")
 _MEDIA = {"play": "Play", "pause": "Pause", "play_pause": "PlayPause",
           "next": "Next", "previous": "Previous"}
 _RATE_MAX, _RATE_WINDOW = 6, 60.0
@@ -290,11 +292,12 @@ def _desktop_rate_ok() -> bool:
     return True
 
 
-def _spawn(argv: list[str]) -> str:
+def _spawn(argv: list[str], env_extra: dict[str, str] | None = None) -> str:
     """Start argv detached (no shell). Returns '' on success, else an error message."""
     try:
         p = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL, start_new_session=True, env=_gui_env())
+                             stderr=subprocess.DEVNULL, start_new_session=True,
+                             env={**_gui_env(), **(env_extra or {})})
     except OSError as e:
         return f"cannot run {argv[0]}: {e}"
     try:
@@ -302,6 +305,16 @@ def _spawn(argv: list[str]) -> str:
     except subprocess.TimeoutExpired:
         return ""
     return "" if rc == 0 else f"{argv[0]} exited with status {rc}"
+
+
+_INSTALL = Path(__file__).resolve().parents[1]   # repo root holding janos/ and .venv
+
+
+def _write_allowed(t: Path, ws: Path, home: Path) -> bool:
+    """write_file policy: workspace, ~/Documents, ~/Downloads; never JANOS's own code or venv."""
+    if t.is_relative_to(_INSTALL / "janos") or t.is_relative_to(_INSTALL / ".venv"):
+        return False
+    return any(t.is_relative_to(r) for r in (ws, (home / "Documents").resolve(), (home / "Downloads").resolve()))
 
 
 def _gdbus(args: list[str]) -> tuple[int, str]:
@@ -314,9 +327,25 @@ def _gdbus(args: list[str]) -> tuple[int, str]:
     return p.returncode, (p.stdout if p.returncode == 0 else p.stderr or p.stdout).strip()
 
 
-def _desktop_entries() -> dict[str, str]:
-    """{desktop-id: Name} for launchable apps. The first directory to define an id wins."""
-    out: dict[str, str] = {}
+_empty_xdg: list[str] = []   # one cached empty XDG_DATA_HOME for the gtk-launch fallback
+
+
+def _launch_argv(app: str, path: Path) -> tuple[list[str], dict[str, str] | None]:
+    """Launch exactly the validated file; gtk-launch re-resolves the id and would prefer ~/.local/share."""
+    path = path.resolve()
+    if not any(path.parent == d.resolve() for d in _APP_DIRS):
+        raise DesktopError(f"Refused: {path} is not in a trusted applications directory.")
+    if shutil.which("gio"):
+        return ["gio", "launch", str(path)], None
+    if not _empty_xdg:
+        _empty_xdg.append(tempfile.mkdtemp(prefix="janos-xdg-"))
+    return ["gtk-launch", app], {"XDG_DATA_HOME": _empty_xdg[0],
+            "XDG_DATA_DIRS": "/usr/share:/var/lib/snapd/desktop:/var/lib/flatpak/exports/share"}
+
+
+def _desktop_entries() -> dict[str, tuple[str, Path]]:
+    """{desktop-id: (Name, file)} for launchable apps. The first directory to define an id wins."""
+    out: dict[str, tuple[str, Path]] = {}
     for d in _APP_DIRS:
         for f in sorted(d.glob("*.desktop")):
             if f.stem.startswith("-") or f.stem in out:
@@ -332,7 +361,7 @@ def _desktop_entries() -> dict[str, str]:
             if kv.get("Type", "Application") != "Application" or kv.get("NoDisplay", "").lower() == "true" \
                     or kv.get("Hidden", "").lower() == "true":
                 continue
-            out[f.stem] = kv.get("Name", "").strip()
+            out[f.stem] = (kv.get("Name", "").strip(), f)
     return out
 
 
@@ -342,13 +371,13 @@ def _find_app(name: str) -> str:
     if not re.fullmatch(r"\w[\w .+&'-]{0,63}", q):
         raise DesktopError(f"Refused: {name!r} is not a valid app name.")
     entries = _desktop_entries()
-    exact = [i for i, n in entries.items() if q in (i.lower(), n.lower())]
-    hits = exact or [i for i, n in entries.items() if q in i.lower() or q in n.lower()]
+    exact = [i for i, n in entries.items() if q in (i.lower(), n[0].lower())]
+    hits = exact or [i for i, n in entries.items() if q in i.lower() or q in n[0].lower()]
     if not hits:
         raise DesktopError(f"No installed app matches {name!r}.")
     if len(hits) > 1:
         raise DesktopError(f"{name!r} is ambiguous; candidates: "
-                           + ", ".join(f"{i} ({entries[i]})" for i in hits[:10]))
+                           + ", ".join(f"{i} ({entries[i][0]})" for i in hits[:10]))
     return hits[0]
 
 
@@ -689,28 +718,35 @@ class Toolbox:
 
         async def write_file(path: str = "", content: str = "", append: bool = False) -> str:
             p = self._resolve(path)
-            # Keep writes inside the workspace or the user's own home. Models
-            # cheerfully try /root and /etc, then burn turns on the resulting
-            # permission errors.
-            home = Path.home().resolve()
             ws = cfg.workspace.resolve()
+            home = Path.home().resolve()
+            # Allowlist: workspace, ~/Documents, ~/Downloads. Never JANOS's own code or venv.
+            ok = lambda t: _write_allowed(t, ws, home)
             try:
                 target = p.resolve()
             except OSError:
                 target = p
-            if not (target.is_relative_to(ws) or target.is_relative_to(home)):
-                return (f"Refused: {target} is outside the workspace and your home "
-                        f"directory. Use a bare filename to write into {ws}.")
-            # Dotfiles/dot-dirs in home (.bashrc, .config, .local, .ssh) can run code
-            # outside the sandbox later, so they are off limits unless inside the workspace.
-            if not target.is_relative_to(ws) and target.relative_to(home).parts[0].startswith("."):
-                return (f"Refused: {target} is a hidden file or folder in your home directory. "
+            if not ok(target):
+                return (f"Refused: {target} is not an allowed write location. Allowed: the workspace "
+                        f"{ws}, {home / 'Documents'}, {home / 'Downloads'}. "
                         f"Use a bare filename to write into {ws}.")
+            fd = -1
             try:
-                p.parent.mkdir(parents=True, exist_ok=True)
-                with open(p, "a" if append else "w", encoding="utf-8") as fh:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                # No O_TRUNC yet: re-check the real path of the opened fd first (symlink race).
+                fd = os.open(target, os.O_WRONLY | os.O_CREAT | (os.O_APPEND if append else 0)
+                             | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+                if not ok(Path(os.path.realpath(f"/proc/self/fd/{fd}"))):
+                    os.close(fd)
+                    return f"Refused: {target} resolves outside the allowed write locations."
+                if not append:
+                    os.ftruncate(fd, 0)
+                with os.fdopen(fd, "a" if append else "w", encoding="utf-8") as fh:
+                    fd = -1
                     fh.write(content)
             except OSError as e:
+                if fd >= 0:
+                    os.close(fd)
                 return f"Cannot write {p}: {e}"
             return f"{'Appended to' if append else 'Wrote'} {p} ({len(content)} chars)"
 
@@ -905,8 +941,10 @@ class Toolbox:
                 return await asyncio.to_thread(_media, command.strip().lower())
             if action == "open_app":
                 app = _find_app(name)
-                argv, done = ["gtk-launch", app], f"Launched {app}."
+                argv, env_extra = _launch_argv(app, _desktop_entries()[app][1])
+                done = f"Launched {app} ({' '.join(argv[:2])})."
             else:
+                env_extra = None
                 url = url.strip()
                 u = urlparse(url)
                 if re.search(r"[\x00-\x20\x7f\\]", url) or u.scheme not in _URL_SCHEMES:
@@ -922,12 +960,18 @@ class Toolbox:
                     if not any(host == d or host.endswith("." + d) for d in allowed):
                         raise DesktopError(f"Refused: {host} is not on the allowed host list "
                                            f"(config desktop_hosts / JANOS_DESKTOP_HOSTS: {', '.join(allowed) or 'empty'}).")
+                    # Best effort only: allowlisted sites may have other open redirects, which is
+                    # why the allowlist stays small. This catches the common redirect shapes.
+                    if (re.search(r"https?://|//", u.fragment)
+                            or any(re.search(r"https?://|//", v) for _, v in parse_qsl(u.query))
+                            or u.path.lower().startswith(_REDIRECT_PATHS)):
+                        raise DesktopError(f"Refused: URL on {host} looks like a redirect to another site.")
                     # Second layer; the allowlist above is what stops DNS rebinding, since the browser re-resolves.
                     why = (await _resolve_public(u.hostname))[1]
                     if why:
                         raise DesktopError(f"Refused: internal or unresolvable target ({why}).")
                 argv, done = ["xdg-open", url], f"Opened {url}."
-            err = await asyncio.to_thread(_spawn, argv)
+            err = await asyncio.to_thread(_spawn, argv, env_extra)
             if err:
                 raise DesktopError(err)
             return done
