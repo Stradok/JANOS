@@ -325,11 +325,20 @@ _INSTALL = Path(__file__).resolve().parents[1]   # repo root holding janos/ and 
 
 
 def _write_allowed(t: Path, ws: Path, home: Path, full: bool = False) -> bool:
-    """write_file policy: workspace, ~/Documents, ~/Downloads (anywhere in full mode); never JANOS's own code or venv."""
+    """write_file policy. Safe: workspace, ~/Documents, ~/Downloads; never JANOS's own code or venv.
+    Full: the JANOS repo or the workspace, minus .git, the venv, secrets and the core package
+    (janos/generated and janos/playbooks stay writable: the two module kinds JANOS authors itself).
+    The unsandboxed shell/run_python in full mode are not confined by this rule."""
+    if full:
+        core, root = _INSTALL / "janos", _INSTALL.parent
+        if t.is_relative_to(core):
+            return t.is_relative_to(core / "generated") or t.is_relative_to(core / "playbooks")
+        if ".git" in t.parts or t.is_relative_to(_INSTALL / ".venv") or t == _INSTALL / "memory" / "api_token" \
+                or t.name in (".brave_key", "api_token"):
+            return False
+        return t.is_relative_to(root) or t.is_relative_to(ws)
     if t.is_relative_to(_INSTALL / "janos") or t.is_relative_to(_INSTALL / ".venv"):
         return False
-    if full:
-        return True
     return any(t.is_relative_to(r) for r in (ws, (home / "Documents").resolve(), (home / "Downloads").resolve()))
 
 
@@ -743,9 +752,11 @@ class Toolbox:
             except OSError:
                 target = p
             if not ok(target):
-                return (f"Refused: {target} is not an allowed write location. Allowed: the workspace "
-                        f"{ws}, {home / 'Documents'}, {home / 'Downloads'}"
-                        f"{' (set access: full to write elsewhere)' if not cfg.full_access else ' (not JANOS own code)'}. "
+                where = (f"the JANOS folder {_INSTALL.parent} or the workspace {ws} (never .git, .venv, secrets or core "
+                         f"files; core files are changed via the coding employee; janos/generated and janos/playbooks are fine)"
+                         if cfg.full_access else
+                         f"the workspace {ws}, {home / 'Documents'}, {home / 'Downloads'} (set access: full to write elsewhere)")
+                return (f"Refused: {target} is not an allowed write location. Allowed: {where}. "
                         f"Use a bare filename to write into {ws}.")
             fd = -1
             try:

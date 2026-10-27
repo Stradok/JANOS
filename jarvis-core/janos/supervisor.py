@@ -20,11 +20,13 @@ One request flows through one loop:
 
 from __future__ import annotations
 
+import asyncio
 import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import quote
 
 from janos.agents import Agent, AgentRunner, DEFAULT_AGENTS
 from janos.config import Config
@@ -35,7 +37,7 @@ from janos.playbooks import PlaybookForge
 from janos.policy import Policy, reward
 from janos.llm import LLM, LLMError
 from janos.memory import Memory
-from janos.tools import Tool, Toolbox
+from janos.tools import Tool, Toolbox, _RATE_MAX, _RATE_MAX_FULL
 
 TRIAGE_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -155,6 +157,59 @@ _NAMED_FILE = re.compile(
 )
 
 
+# ---------------------------------------------------------------- desktop intents
+# Exists because a 3B model mis-routes these: asked to "play a song on spotify" it
+# ran a made-up macOS `shell` command instead of the `desktop` tool. A request this
+# plain is decidable in Python, so it never reaches a model. Conservative on purpose:
+# any extra clause, question, or file/code word returns None (normal flow).
+_APP_STOP = {"a", "an", "the", "my", "new", "another", "this", "that", "it", "up", "file", "files",
+             "folder", "directory", "door", "document", "doc", "report", "project", "repo", "code",
+             "script", "window", "tab", "account", "and", "then", "to", "for", "in", "with", "on",
+             "if", "when", "so", "or", "but", "me", "how", "what", "why", "who"}
+_MEDIA_WORDS = r"(?:the |my |some )?(?:music|song|songs|track|spotify|playback)"
+_URL = (r"(?:https?://\S+|[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|org|net|io|dev|tv|co|app|ai|gov|edu|uk)"
+        r"(?:/\S*)?)")
+
+
+def parse_desktop_intent(task: str) -> list[dict[str, str]] | None:
+    """Ordered `desktop` tool-call args for an unambiguous simple request, else None."""
+    t = task.lower().strip()
+    t = re.sub(r"[!?]+", " ", t).strip(" .")
+    t = re.sub(r"^(?:(?:hey |ok )?(?:janos|jarvis),? )?(?:please )?"
+               r"(?:(?:can|could|would|will) you (?:please )?)?", "", t)
+    t = re.sub(r"[ ,]+please$", "", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    media = lambda c: [{"action": "media", "command": c}]
+    spotify = [{"action": "open_app", "name": "spotify"}, {"action": "media", "command": "play"}]
+
+    if re.fullmatch(rf"(?:pause|stop)(?: {_MEDIA_WORDS})?", t):
+        return media("pause")
+    if re.fullmatch(rf"(?:resume|continue|unpause)(?: {_MEDIA_WORDS})?|play(?: (?:the |my |some )?(?:music|songs?))?", t):
+        return media("play")
+    if re.fullmatch(r"(?:next|skip)(?: (?:the |this )?(?:song|track))?", t):
+        return media("next")
+    if re.fullmatch(r"(?:previous|last|go back)(?: (?:the )?(?:song|track))|previous", t):
+        return media("previous")
+    if re.fullmatch(r"(?:play|open|launch|start)(?: up)? (?:the |my )?spotify"
+                    r"|play (?:a song|some music|music|something|anything|a track|songs?)(?: (?:on|in|with) spotify)", t):
+        return spotify
+    m = re.fullmatch(r"play (?:me )?([\w '&.-]{1,80}?) (?:on|in|with) spotify", t)
+    if m:
+        q = re.sub(r"^(?:anything|something|some music|music|songs?|a song|any song)(?: by)? ", "", m.group(1))
+        q = re.sub(r"\s+by\s+", " ", q).strip()
+        if q and not {"and", "then", "or", "but"} & set(q.split()):
+            return spotify[:1] + [{"action": "open_url", "url": "spotify:search:" + quote(q, safe="")}]
+        return None
+    m = re.fullmatch(rf"(?:open|go to|visit|browse to)(?: the)? ({_URL})", t)
+    if m:
+        u = m.group(1)
+        return [{"action": "open_url", "url": u if u.startswith("http") else "https://" + u}]
+    m = re.fullmatch(r"(?:open|launch|start)(?: up)? ([a-z0-9][a-z0-9+-]*(?: [a-z0-9+-]+){0,2})", t)
+    if m and not _APP_STOP & set(m.group(1).split()):
+        return [{"action": "open_app", "name": m.group(1)}]
+    return None
+
+
 @dataclass
 class Turn:
     """Everything that happened while answering one request."""
@@ -185,6 +240,9 @@ class Turn:
             "duration_ms": self.duration_ms, "episode_id": self.episode_id,
             "lesson": self.lesson, "recalled_episodes": self.recalled,
         }
+
+
+_sleep = asyncio.sleep   # tests replace this
 
 
 class Supervisor:
@@ -890,6 +948,16 @@ or the only available lesson is a truism.
             turn.answer = "Say something and I'll get to work."
             return turn
 
+        calls = parse_desktop_intent(turn.task) if self.config.desktop else None
+        if calls:
+            await self._run_desktop_intent(turn, calls)
+            self._emit({"type": "verify", "score": turn.score, "ok": turn.score > 0,
+                        "issues": turn.issues, "fix": "", "fast": True})
+            turn.duration_ms = int((time.perf_counter() - started) * 1000)
+            self._finish(turn, None)
+            self._emit({"type": "done", "score": turn.score, "ms": turn.duration_ms})
+            return turn
+
         context, recalled = self._context(turn.task)
         turn.recalled = recalled
         self._emit({"type": "recall", "episodes": recalled})
@@ -901,7 +969,7 @@ or the only available lesson is a truism.
         self._emit({"type": "triage", **triage})
 
         if turn.complexity == "simple":
-            turn.plan = [{"step": turn.task, "agent": triage["agent"]}]
+            turn.plan = self._repair_plan(turn.task, [{"step": turn.task, "agent": triage["agent"]}])
         else:
             turn.plan = await self._plan(turn.task, context, turn.task_type)
             self._emit({"type": "plan", "steps": turn.plan})
@@ -949,8 +1017,17 @@ or the only available lesson is a truism.
                 break
 
         turn.duration_ms = int((time.perf_counter() - started) * 1000)
+        self._finish(turn, decision)
 
-        # ---- remember and learn -------------------------------------------
+        turn.lesson = await self._distil(turn)
+        if turn.lesson:
+            self._emit({"type": "lesson", "text": turn.lesson})
+
+        self._emit({"type": "done", "score": turn.score, "ms": turn.duration_ms})
+        return turn
+
+    def _finish(self, turn: Turn, decision: Any) -> None:
+        """Remember the episode and feed the learners (shared by every handle() path)."""
         turn.episode_id = self.memory.remember(
             task=turn.task, answer=turn.answer, task_type=turn.task_type,
             plan=turn.plan, agents=turn.agents_used, tool_calls=turn.tool_calls,
@@ -965,9 +1042,64 @@ or the only available lesson is a truism.
             self.policy.learn(decision, reward(turn.score, turn.duration_ms / 1000),
                               key=turn.episode_id)
 
-        turn.lesson = await self._distil(turn)
-        if turn.lesson:
-            self._emit({"type": "lesson", "text": turn.lesson})
+    async def _desk(self, turn: Turn, args: dict[str, str]):
+        """One desktop call through the real tool path, logged and announced like an agent's."""
+        r = await self.toolbox.run("desktop", args)
+        turn.tool_calls.append(r.as_dict())
+        self._emit({"type": "tool", "agent": "operator", "turn": len(turn.tool_calls), "tool": "desktop",
+                    "args": args, "ok": r.ok, "output": r.output[:400]})
+        return r
 
-        self._emit({"type": "done", "score": turn.score, "ms": turn.duration_ms})
-        return turn
+    async def _run_desktop_intent(self, turn: Turn, calls: list[dict[str, str]]) -> None:
+        """Run parsed desktop calls in order; the answer comes from their results, never a model."""
+        turn.task_type, turn.complexity = "desktop", "simple"
+        turn.plan = [{"step": f"desktop {c}", "agent": "operator"} for c in calls]
+        turn.agents_used = ["operator"]
+        full = self.config.full_access
+        tries = min(6, (_RATE_MAX_FULL if full else _RATE_MAX) - 1)   # the launch uses one slot
+        say: list[str] = []
+        failed = ""
+
+        async def play_after_launch() -> Any:
+            # the player is not on the bus right after launch: retry, then report honestly
+            for i in range(tries):
+                r = await self._desk(turn, {"action": "media", "command": "play"})
+                if r.ok or r.output.startswith("Refused") or i == tries - 1:
+                    return r
+                await _sleep(1)
+
+        if calls == [{"action": "media", "command": "play"}]:
+            r = await self._desk(turn, calls[0])
+            if not r.ok and "No media player running" in r.output:   # nothing to resume: start Spotify
+                calls = [{"action": "open_app", "name": "spotify"}, calls[0]]
+                turn.plan = [{"step": f"desktop {c}", "agent": "operator"} for c in calls]
+            else:
+                calls = []
+                failed = "" if r.ok else r.output
+                if r.ok:
+                    say.append(r.output + " Playback state not checked.")
+                else:
+                    turn.errors.append(f"desktop: {r.output[:160]}")
+
+        for i, c in enumerate(calls):
+            launched = i > 0 and calls[i - 1]["action"] == "open_app"
+            r = await (play_after_launch() if c["action"] == "media" and launched else self._desk(turn, c))
+            if not r.ok:
+                failed = r.output
+                turn.errors.append(f"desktop: {r.output[:160]}")
+                break
+            if c["action"] == "open_app":
+                say.append(f"Opened {c['name'].title()}.")
+            elif c["action"] == "open_url" and c["url"].startswith("spotify:search:"):
+                say.append("Opened the Spotify search page for your request. That only opens the results; "
+                           "it does not start playback, so press play on the song.")
+            elif c["action"] == "open_url":
+                say.append(f"Opened {c['url']}.")
+            else:
+                say.append(r.output + " Playback state not checked." if c["command"] == "play" else r.output)
+        if failed:
+            turn.answer = f"I could not finish that: {failed}" + (f" (done so far: {' '.join(say)})" if say else "")
+            turn.score, turn.issues = 0.0, [failed[:160]]
+        else:
+            turn.answer = " ".join(say)
+            turn.score, turn.issues = 0.9, []

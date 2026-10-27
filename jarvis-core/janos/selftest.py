@@ -1157,8 +1157,8 @@ async def test_full_access() -> None:
     ins = T._INSTALL
     check("safe write policy unchanged",
           not T._write_allowed(home / "Desktop/x.txt", ws, home) and T._write_allowed(home / "Documents/x", ws, home))
-    check("full write policy allows home files, refuses JANOS code and venv",
-          T._write_allowed(home / "Desktop/x.txt", ws, home, True) and T._write_allowed(home / ".bashrc", ws, home, True)
+    check("full write policy: workspace ok; home files outside the JANOS folder, core code and venv refused",
+          T._write_allowed(ws / "x.txt", ws, home, True) and not T._write_allowed(home / ".bashrc", ws, home, True)
           and not T._write_allowed(ins / "janos/x.py", ws, home, True) and not T._write_allowed(ins / ".venv/x", ws, home, True))
 
     # desktop dirs and open_url
@@ -1258,6 +1258,159 @@ async def test_full_access() -> None:
         sup.close()
 
 
+async def test_desktop_intents() -> None:
+    section("Deterministic desktop intents and full-mode write scope (everything mocked)")
+    from janos import supervisor as S, tools as T
+    from janos.supervisor import parse_desktop_intent as P
+    play = {"action": "media", "command": "play"}
+    spot = {"action": "open_app", "name": "spotify"}
+    med = lambda c: [{"action": "media", "command": c}]
+    table = {
+        "pause the music": med("pause"), "stop spotify": med("pause"), "Pause.": med("pause"),
+        "resume": med("play"), "continue the music": med("play"), "play": med("play"), "play music": med("play"),
+        "next song": med("next"), "skip track": med("next"), "previous song": med("previous"), "last song": med("previous"),
+        "play spotify": [spot, play], "open spotify": [spot, play], "play a song on spotify": [spot, play],
+        "play some music on spotify": [spot, play], "Please play music on Spotify!": [spot, play],
+        "play anything by third eye blind on spotify":
+            [spot, {"action": "open_url", "url": "spotify:search:third%20eye%20blind"}],
+        "play yellow by coldplay on spotify":
+            [spot, {"action": "open_url", "url": "spotify:search:yellow%20coldplay"}],
+        "open firefox": [{"action": "open_app", "name": "firefox"}],
+        "launch visual studio": [{"action": "open_app", "name": "visual studio"}],
+        "open youtube.com": [{"action": "open_url", "url": "https://youtube.com"}],
+        "go to https://github.com/x/y": [{"action": "open_url", "url": "https://github.com/x/y"}],
+    }
+    bad = [k for k, v in table.items() if P(k) != v]
+    check("intent parser: every supported phrase maps to its exact call list", not bad,
+          str([(k, P(k)) for k in bad]))
+    neg = ["how do I open spotify", "open spotify and write a report", "open the file report.txt", "play the guitar",
+           "what time is it", "open a new bank account", "open spotify, then write a report", "open the door",
+           "play x and then delete it on spotify", "open notes.txt", "start a python script"]
+    leaked = [n for n in neg if P(n) is not None]
+    check("intent parser: questions, extra clauses, files and chit-chat fall through to None", not leaked, str(leaked))
+
+    sup = Supervisor(Config.load())
+    orig = (T._spawn, T._APP_DIRS, T._resolve_public, T._clock, T._gdbus, S._sleep)
+    spawned: list = []
+    bus = {"players": "(['org.mpris.MediaPlayer2.spotify'],)", "fail_play": 0}
+    def gd(args):
+        if "ListNames" in args[-1]:
+            return 0, bus["players"]
+        if args[-1].endswith("Player.Play") and bus["fail_play"] > 0:
+            bus["fail_play"] -= 1
+            return 1, "no such name"
+        return 0, "()"
+    sleeps: list = []
+    async def nosleep(sec): sleeps.append(sec)
+    T._spawn = lambda argv, env_extra=None: spawned.append(list(argv)) or ""
+    T._gdbus = gd
+    S._sleep = nosleep
+    now = [5000.0]
+    T._clock = lambda: now[0]
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            apps = Path(td) / "apps"; apps.mkdir()
+            (apps / "spotify.desktop").write_text("[Desktop Entry]\nType=Application\nName=Spotify\nExec=spotify\n")
+            T._APP_DIRS = [apps]
+            events: list = []
+            sup.on_event = events.append
+            def fresh():
+                T._desktop_calls.clear(); spawned.clear(); events.clear(); sleeps.clear()
+                return S.Turn(task="t")
+            # open + retry until the player appears on the bus
+            t = fresh(); bus["players"] = "([':1.1'],)"
+            class Late:   # the player shows up on the bus after the third play attempt
+                n = 0
+            def gd_late(args):
+                if "ListNames" in args[-1]:
+                    Late.n += 1
+                    return 0, "([':1.1'],)" if Late.n <= 3 else "(['org.mpris.MediaPlayer2.spotify'],)"
+                return 0, "()"
+            T._gdbus = gd_late
+            await sup._run_desktop_intent(t, [spot, play])
+            tools = [(c["tool"], c["args"]) for c in t.tool_calls]
+            check("intent: open_app then media play retried until the player is on the bus",
+                  tools[0] == ("desktop", spot) and tools[-1] == ("desktop", play) and len(tools) == 5
+                  and len(sleeps) == 3 and t.score > 0 and not t.errors and spawned and "Opened Spotify." in t.answer
+                  and any(e["type"] == "tool" and e["tool"] == "desktop" for e in events), str((tools, t.answer)))
+            check("intent: play answer never claims 'playing' unprobed", "playing" not in t.answer.lower(), t.answer)
+            # player never appears: honest failure, bounded retries
+            t = fresh(); T._gdbus = lambda a: (0, "([':1.1'],)") if "ListNames" in a[-1] else (0, "()")
+            await sup._run_desktop_intent(t, [spot, play])
+            check("intent: player never appears -> ok False, honest message, bounded retries",
+                  t.score == 0.0 and t.errors and "could not" in t.answer and len(t.tool_calls) <= 1 + 6
+                  and "Playing" not in t.answer, str((t.answer, len(t.tool_calls))))
+            # search page
+            t = fresh(); T._gdbus = gd; bus["fail_play"] = 0
+            await sup._run_desktop_intent(t, P("play anything by third eye blind on spotify"))
+            check("intent: song request opens the search page and says it did not start playback",
+                  t.tool_calls[-1]["args"]["url"] == "spotify:search:third%20eye%20blind" and t.score > 0
+                  and ["xdg-open", "spotify:search:third%20eye%20blind"] in spawned
+                  and "search page" in t.answer and "does not start playback" in t.answer
+                  and "now playing" not in t.answer.lower(), t.answer)
+            # failing call
+            t = fresh(); T._APP_DIRS = []
+            await sup._run_desktop_intent(t, [{"action": "open_app", "name": "firefox"}])
+            check("intent: a failing call gives ok False and the refusal text", t.score == 0.0 and "No installed app" in t.answer
+                  and not spawned, t.answer)
+            T._APP_DIRS = [apps]
+            # bare play with nothing running falls back to launching spotify
+            t = fresh(); Late.n = 0; T._gdbus = gd_late
+            await sup._run_desktop_intent(t, med("play"))
+            check("intent: bare play with no player launches spotify then plays",
+                  [c["args"].get("action") for c in t.tool_calls][:2] == ["media", "open_app"] and t.score > 0,
+                  str(t.tool_calls))
+            # handle(): no LLM, no policy exploration, episode stored, flag off skips
+            t = fresh(); T._gdbus = gd; bus["players"] = "(['org.mpris.MediaPlayer2.spotify'],)"
+            stored: list = []
+            sup.memory.remember = lambda **k: stored.append(k) or "ep1"
+            sup.memory.record_agent = lambda *a, **k: None
+            async def boom(*a, **k): raise AssertionError("LLM path used")
+            sup._triage = boom
+            turn = await sup.handle("pause the music")
+            check("handle(): intent turn skips triage/LLM, stores the episode, task_type desktop",
+                  turn.task_type == "desktop" and turn.score > 0 and stored and stored[0]["task_type"] == "desktop"
+                  and turn.tool_calls[0]["args"] == med("pause")[0] and events[-1]["type"] == "done", str(turn.as_dict()))
+            sup.config.desktop = False
+            try:
+                await sup.handle("pause the music")
+                skipped = False
+            except AssertionError:
+                skipped = True
+            sup.config.desktop = True
+            check("handle(): with desktop disabled the intent path is skipped", skipped)
+            # simple path now honours must-call routing
+            plan = sup._repair_plan("play a song on spotify", [{"step": "play a song on spotify", "agent": "operator"}])
+            check("simple path: must-call request gets the desktop step; others unchanged",
+                  "desktop" in plan[0]["step"] and sup._repair_plan("what time is it", [{"step": "x", "agent": "operator"}]) == [{"step": "x", "agent": "operator"}], str(plan))
+            import inspect
+            check("handle() applies _repair_plan on the simple path",
+                  "self._repair_plan(turn.task, [{" in inspect.getsource(S.Supervisor.handle))
+    finally:
+        T._spawn, T._APP_DIRS, T._resolve_public, T._clock, T._gdbus, S._sleep = orig
+        sup.close()
+
+    # write scope in full mode (temp layout stands in for the repo; nothing real is written)
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td).resolve() / "JANOS"
+        inst = root / "jarvis-core"; ws = root.parent / "ws"; home = root.parent / "home"
+        real = T._INSTALL
+        T._INSTALL = inst
+        try:
+            yes = [root / "notes" / "x.py", inst / "janos" / "generated" / "t.py", inst / "janos" / "playbooks" / "p.json", ws / "f.txt"]
+            no = [root / ".git" / "hooks" / "pre-commit", inst / ".venv" / "x", inst / "janos" / "tools.py",
+                  inst / "memory" / "api_token", inst / ".brave_key", root.parent / "other" / "x.txt", home / ".bashrc"]
+            got_yes = [T._write_allowed(p, ws, home, True) for p in yes]
+            got_no = [T._write_allowed(p, ws, home, True) for p in no]
+            check("full mode: JANOS folder, generated/playbooks and workspace writable", all(got_yes), str(got_yes))
+            check("full mode: .git, .venv, core, secrets and anything outside refused", not any(got_no), str(got_no))
+            check("safe mode unchanged: repo notes and home refused, workspace allowed",
+                  not T._write_allowed(root / "notes" / "x.py", ws, home) and T._write_allowed(ws / "f.txt", ws, home)
+                  and not T._write_allowed(inst / "janos" / "generated" / "t.py", ws, home))
+        finally:
+            T._INSTALL = real
+
+
 async def test_employee_live() -> None:
     section("Employee (live OpenCode)")
     if not SNAP_BIN.exists() and not shutil.which("opencode"):
@@ -1297,6 +1450,7 @@ async def main_async() -> int:
     await test_tools()
     await test_sandbox()
     await test_desktop()
+    await test_desktop_intents()
     await test_playbooks()
     await test_voice()
     test_policy()
