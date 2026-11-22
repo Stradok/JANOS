@@ -48,3 +48,7 @@ UI/janos-hud/node_modules/
 
 # Packaged desktop builds (packaging/build-deb.sh)
 /dist/
+
+# Internal notes and agent config (kept locally; archived in Stradok/Archive)
+CLAUDE.md
+AGENTS.md
