@@ -1,0 +1,6 @@
+{
+  "name": "Fragmented Orb",
+  "description": "A cinematic 3D simulation of a streamlined precision core reactor housing drifting apart and reassembling around a dense, high-luminance energy core amidst soft atmospheric bloom and studio lighting.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

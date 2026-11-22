@@ -1,0 +1,6 @@
+{
+  "name": "Crimson Energy Banner",
+  "description": "Ultra-wide 1584x396 banner with crimson energy-web sphere, negative space composition, real-time procedural renderer, and high-res export.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
