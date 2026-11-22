@@ -52,3 +52,4 @@ UI/janos-hud/node_modules/
 # Internal notes and agent config (kept locally; archived in Stradok/Archive)
 CLAUDE.md
 AGENTS.md
+/docs/
